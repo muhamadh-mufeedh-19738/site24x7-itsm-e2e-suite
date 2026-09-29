@@ -1,0 +1,222 @@
+{
+  "captured_at": "2026-09-29T06:30:03.298Z",
+  "grid": "https://integrations-qa.localsite24x7.com",
+  "endpoints": [
+    "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
+  ],
+  "integrations": [
+    {
+      "name": "Check Up Alert Closevkjfs",
+      "type": null,
+      "type_id": "20",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "department_id": "213004000000006907",
+        "oauth2_provider_id": "47777000028874080",
+        "subject": "$MONITORNAME is $STATUS",
+        "department_name": "pandyapallaku",
+        "manual_resolve": false,
+        "problem_alert": true,
+        "type": 20,
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000048536017",
+        "organization_id": "84903591",
+        "service_status": 0,
+        "name": "Check Up Alert Closevkjfs",
+        "to_email_id": "support@pandyapallaku.localzohodesk.com"
+      }
+    },
+    {
+      "name": "HALO TEST for Sep 07",
+      "type": null,
+      "type_id": "43",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "47777000045833003",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 43,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "url": "https://salsucommoditites.haloitsm.com/",
+        "selection_type": 0,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000047763484",
+        "service_status": 0,
+        "name": "HALO TEST for Sep 07"
+      }
+    },
+    {
+      "name": "https://freshstarttapsb.haloitsm.com/",
+      "type": null,
+      "type_id": "43",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "1",
+        "down_alert": true,
+        "credential_profile_id": "47777000049549051",
+        "manual_resolve": false,
+        "type": 43,
+        "title": "$MONITORNAME is $STATUS",
+        "url": "https://freshstarttapsb.haloitsm.com/",
+        "selection_type": 0,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000049549052",
+        "service_status": 0,
+        "name": "https://freshstarttapsb.haloitsm.com/"
+      }
+    },
+    {
+      "name": "Sanity",
+      "type": null,
+      "type_id": "26",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 26,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000049617001",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "Sanity"
+      }
+    },
+    {
+      "name": "Sanity DC",
+      "type": null,
+      "type_id": "21",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "type": 21,
+        "title": "$MONITORNAME is $STATUS",
+        "channel_url": "https://web.telegram.org/a/#-1003405433403",
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000049617094",
+        "service_status": 0,
+        "name": "Sanity DC",
+        "send_custom_parameters": false
+      }
+    },
+    {
+      "name": "Sanity Pg",
+      "type": null,
+      "type_id": "1",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 1,
+        "title": "$MONITORNAME is $STATUS",
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000049617095",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "Sanity Pg"
+      }
+    },
+    {
+      "name": "Sanity Slack",
+      "type": null,
+      "type_id": "5",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "auth_type": "0",
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 5,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000049617002",
+        "service_status": 0,
+        "name": "Sanity Slack",
+        "send_custom_parameters": false
+      }
+    },
+    {
+      "name": "ServiceDesk Plus Cloud",
+      "type": null,
+      "type_id": "4",
+      "status": "Active",
+      "raw": {
+        "portal_name": "muhamadhmufeedhtpt1 - Site24x7",
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "cmdb_integration": true,
+        "oauth2_provider_id": "47777000048365001",
+        "subject": "$MONITORNAME is $STATUS",
+        "module": "1",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 4,
+        "manual": false,
+        "selection_type": 0,
+        "portal_api_name": "itdesk",
+        "trouble_alert": true,
+        "cmdb_service_id": "47777000048365003",
+        "critical_alert": true,
+        "service_id": "47777000048365005",
+        "service_status": 0,
+        "name": "ServiceDesk Plus Cloud",
+        "cmdb_selection_type": "0",
+        "action_on_availability": "0",
+        "portal_id": "85038439"
+      }
+    },
+    {
+      "name": "Snow HALO Sanity",
+      "type": null,
+      "type_id": "11",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "47777000042838069",
+        "instance_url": "https://dev406429.service-now.com/",
+        "is_incident_api": "1",
+        "sender_name": "Site24x7",
+        "problem_alert": false,
+        "type": 11,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "enable_onboarding": false,
+        "selection_type": 0,
+        "is_assignment_group_enabled": false,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": false,
+        "service_id": "47777000046569109",
+        "service_status": 0,
+        "name": "Snow HALO Sanity",
+        "action_on_availability": "0"
+      }
+    }
+  ]
+}

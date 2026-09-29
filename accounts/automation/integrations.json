@@ -1,0 +1,152 @@
+{
+  "captured_at": "2026-09-28T16:08:15.210Z",
+  "grid": "https://integrations-qa.localsite24x7.com",
+  "endpoints": [
+    "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
+  ],
+  "integrations": [
+    {
+      "name": "Desk Automation",
+      "type": null,
+      "type_id": "20",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "department_id": "298692000000006907",
+        "oauth2_provider_id": "73970000000110024",
+        "subject": "$MONITORNAME is $STATUS",
+        "department_name": "salsuisqueen",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 20,
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000000863001",
+        "organization_id": "125009382",
+        "service_status": 0,
+        "name": "Desk Automation",
+        "to_email_id": "support@salsuisqueen.localzohodesk.com"
+      }
+    },
+    {
+      "name": "HALO Automation",
+      "type": null,
+      "type_id": "43",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "1",
+        "down_alert": true,
+        "credential_profile_id": "73970000002743001",
+        "manual_resolve": false,
+        "type": 43,
+        "title": "$MONITORNAME is $STATUS",
+        "url": "https://salsucommoditites.haloitsm.com",
+        "selection_type": 0,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000002743002",
+        "service_status": 0,
+        "name": "HALO Automation"
+      }
+    },
+    {
+      "name": "Pager Duty Automation",
+      "type": null,
+      "type_id": "1",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 1,
+        "title": "$MONITORNAME is $STATUS",
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000003240674",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "Pager Duty Automation"
+      }
+    },
+    {
+      "name": "sanity",
+      "type": null,
+      "type_id": "5",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "auth_type": "0",
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 5,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000003240796",
+        "service_status": 0,
+        "name": "sanity",
+        "send_custom_parameters": false
+      }
+    },
+    {
+      "name": "ServiceDesk Plus Cloud",
+      "type": null,
+      "type_id": "4",
+      "status": "Active",
+      "raw": {
+        "portal_name": "Site24x7_124304490",
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "subject": "$MONITORNAME is $STATUS",
+        "oauth2_provider_id": "73970000002868055",
+        "module": "1",
+        "manual_resolve": false,
+        "type": 4,
+        "manual": false,
+        "selection_type": 0,
+        "portal_api_name": "itdesk",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000002868057",
+        "service_status": 0,
+        "name": "ServiceDesk Plus Cloud",
+        "cmdb_selection_type": "0",
+        "action_on_availability": "0",
+        "portal_id": "126969446"
+      }
+    },
+    {
+      "name": "ServiceNow Automation",
+      "type": null,
+      "type_id": "11",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "73970000002743003",
+        "instance_url": "https://dev406429.service-now.com/",
+        "is_incident_api": "1",
+        "sender_name": "Site24x7",
+        "problem_alert": false,
+        "type": 11,
+        "title": "$MONITORNAME is $STATUS",
+        "enable_onboarding": false,
+        "selection_type": 0,
+        "is_assignment_group_enabled": false,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000002743004",
+        "service_status": 0,
+        "name": "ServiceNow Automation",
+        "action_on_availability": "0"
+      }
+    }
+  ]
+}

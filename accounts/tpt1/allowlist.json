@@ -1,0 +1,12 @@
+{
+  "_comment": "ONLY these monitors may ever be modified. 2 website + 4 server candidates.",
+  "monitor_names": [],
+  "monitor_ids": [
+    "47777000039283093",
+    "47777000042853029",
+    "47777000046527050",
+    "47777000046527002",
+    "47777000044881002",
+    "47777000044885002"
+  ]
+}

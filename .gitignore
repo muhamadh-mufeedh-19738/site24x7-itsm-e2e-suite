@@ -1,0 +1,57 @@
+# ─── Secrets & Credentials ────────────────────────────────────────────────────
+# NEVER commit these — they contain tokens, passwords, API keys
+*.env
+.env
+.itsm.env
+.session.env
+account.env
+.token*.env
+*.token.env
+env.sh
+env.big.sh
+extract_cookie.py
+get_token.sh
+get_refresh_token.sh
+
+# ─── Runtime / Generated data ─────────────────────────────────────────────────
+# These are rebuilt every run — no need to commit
+accounts/*/logreport_*.json
+accounts/*/stage2b_result.json
+accounts/*/stage3_*.json
+accounts/*/stage4_*.json
+accounts/*/stage4_results.json
+accounts/*/ticket_verification.json
+accounts/*/itsm_first_results.json
+accounts/*/s247_config.json
+accounts/*/account_inventory.json
+accounts/*/backup_*.json
+accounts/*/patch_cookie_check.py
+
+# ─── Reports ──────────────────────────────────────────────────────────────────
+# HTML/XML/JSON reports are generated output — keep out of git
+accounts/*/reports/
+integrations_list.txt
+
+# ─── What TO commit per account (explicitly allowed) ─────────────────────────
+# allowlist.json      → which monitors to test (safe, no secrets)
+# known_issues.json   → triaged known bugs (safe)
+# test_config.json    → monitor inventory (safe)
+# integrations.json   → live integrations snapshot (safe)
+!accounts/*/allowlist.json
+!accounts/*/known_issues.json
+!accounts/*/test_config.json
+!accounts/*/integrations.json
+
+# ─── Node / Python ────────────────────────────────────────────────────────────
+node_modules/
+node_modules
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ─── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,5 @@
+{
+  "Pager Duty Only for Automation": "TRIAGED: routing key was misconfigured in Site24x7. Now updated to the correct key — re-run to confirm delivery.",
+  "Pager Duty Only": "TRIAGED: routing key was misconfigured in Site24x7. Now updated to the correct key — re-run to confirm delivery.",
+  "PagerDuty": "TRIAGED: routing key was misconfigured in Site24x7. Now updated to the correct key — re-run to confirm delivery."
+}
