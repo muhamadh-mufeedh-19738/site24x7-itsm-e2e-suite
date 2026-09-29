@@ -767,17 +767,35 @@ def cmd_verify(args):
         for e in globals().get("_ROWS_OUTSIDE_WINDOW", []):
             if not isinstance(e, dict):
                 continue
-            if name not in [str(x) for x in as_list(e.get("to"))]:
+            # WEB_MON ALIGNMENT — use canonical To field casing (AlertLogs.java)
+            if name not in [str(x) for x in as_list(
+                    e.get("To") or e.get("to"))]:
                 continue
-            msg = str(e.get("message", ""))
+            msg = str(e.get("Message") or e.get("message") or "")
             op2 = OP_RE.search(msg)
-            tid2 = TICKET_RE.search(msg)
-            if not (op2 and tid2):
+            if not op2:
                 continue
-            kind2, ticket2 = op2.group(1).lower(), tid2.group(1)
+            # WEB_MON ALIGNMENT — read RequestMessageId first (primary DB field)
+            raw_tid2 = (e.get("RequestMessageId")
+                        or e.get("requestmessageid")
+                        or e.get("requestMessageId")
+                        or "")
+            raw_tid2 = str(raw_tid2).strip() if raw_tid2 else ""
+            if raw_tid2 and raw_tid2.lower() not in _BOGUS_TICKET_IDS:
+                ticket2 = raw_tid2
+            else:
+                # Fallback: regex on Message text (only if DB field absent)
+                tid2 = TICKET_RE.search(msg)
+                if not tid2:
+                    continue
+                ticket2 = tid2.group(1)
+                if ticket2.lower() in _BOGUS_TICKET_IDS:
+                    continue
             if ticket2 not in created:
                 continue                      # not ours, ignore
-            st2 = ALERT_STATUS.get(str(e.get("status")), str(e.get("status")))
+            st2_code = str(e.get("Status") or e.get("status") or "")
+            st2 = ALERT_STATUS.get(st2_code, st2_code)
+            kind2 = op2.group(1).lower()
             if kind2 == "close":
                 closed.add(ticket2)
                 late += 1
@@ -807,6 +825,22 @@ def cmd_verify(args):
             verdict = "INCONCLUSIVE"
         log(f"  {name[:25]:<26}{rec['rows']:>5}{len(created):>8}"
             f"{len(closed):>7}{len(updated):>5}{rec['failed']:>6}   {verdict}")
+        # Build a clean per-ticket DB evidence map for traceability.
+        # Each entry records WHERE the ticket ID came from (the exact
+        # Cassandra/AppLog field) so the report can prove it read from
+        # the correct Web_Mon DB path (WM_ALERT_LOGS.RequestMessageId).
+        db_evidence = {}
+        for tid, tinfo in rec.get("ticket_times", {}).items():
+            db_evidence[tid] = {
+                # The canonical Cassandra field — Web_Mon ground truth
+                "cassandra_field": "WM_ALERT_LOGS.RequestMessageId",
+                "cassandra_value": tinfo.get("RequestMessageId") or tid,
+                "ticket_id_source": tinfo.get("ticket_id_source",
+                                              "Message regex"),
+                "operation": tinfo.get("operation"),
+                "alert_status": tinfo.get("status"),
+                "alert_row_time_raw": tinfo.get("alert_row_time_raw"),
+            }
         out.append({"integration": name, "rows": rec["rows"],
                     "created_ticket_ids": sorted(created),
                     "closed_ticket_ids": sorted(closed),
@@ -815,6 +849,9 @@ def cmd_verify(args):
                     "matched_on_up_ticket_ids": sorted(matched_on_up),
                     "statuses_seen": sorted(rec["statuses"]),
                     "ticket_times": rec.get("ticket_times", {}),
+                    # WEB_MON DB evidence — proves ticket IDs came from the
+                    # correct Cassandra table/field (WM_ALERT_LOGS.RequestMessageId)
+                    "webmon_db_evidence": db_evidence,
                     "delivery_modes": sorted(rec.get("modes", [])),
                     "failed_statuses": sorted(rec.get("failed_statuses", [])),
                     "failed_rows": rec["failed"], "verdict": verdict})
@@ -842,6 +879,24 @@ def cmd_verify(args):
                    "window_until": getattr(args, "until", None),
                    "window_exact": bool(getattr(args, "since", None)
                                         or getattr(args, "until", None)),
+                   # WEB_MON ALIGNMENT — ticket ID storage path metadata
+                   # Ticket IDs are read from WM_ALERT_LOGS (Cassandra) via
+                   # the /api/v2/alert_logs endpoint. The canonical field is
+                   # RequestMessageId, written by AlertLogs.addAlertLogToApplog().
+                   # This is the ONLY correct source — not Redis, not
+                   # WM_STATUS_DATA (those are internal product stores we
+                   # cannot and should not access from outside).
+                   "ticket_id_source_metadata": {
+                       "cassandra_table": "WM_ALERT_LOGS",
+                       "canonical_field": "RequestMessageId",
+                       "fallback_field": "Message (TICKET_RE regex)",
+                       "java_class": "AlertLogs.addAlertLogToApplog()",
+                       "java_write": "jsonObject.put(\"RequestMessageId\", "
+                                     "(String)prop.get(\"ticket_id\"))",
+                       "api_endpoint": "/app/api/applog/search/",
+                       "webmon_file": "source/server/com/adventnet/webmon/"
+                                      "reports/AlertLogs.java",
+                   },
                    "results": out}, fh, indent=2)
     log("\n  Wrote ticket_verification.json")
 

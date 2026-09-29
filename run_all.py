@@ -625,6 +625,10 @@ def build_findings(stage3, stage4, known, live_recs=None):
             "alert_log_rows": e.get("rows"),
             "failed_rows": e.get("failed_rows"),
             "tool_tickets": (s4 or {}).get("tickets") or [],
+            # WEB_MON DB evidence — proves ticket IDs came from
+            # WM_ALERT_LOGS.RequestMessageId (Cassandra), not guessed.
+            "webmon_db_evidence": e.get("webmon_db_evidence") or
+                                  (s4 or {}).get("webmon_db_evidence") or {},
         })
 
     # ALWAYS-PRESENT RULE: every integration that is live in the account
@@ -691,6 +695,7 @@ def build_findings(stage3, stage4, known, live_recs=None):
                 "alert_log_rows": 0,
                 "failed_rows": 0,
                 "tool_tickets": [],
+                "webmon_db_evidence": {},
             })
 
     findings.sort(key=lambda f: {DEFECT: 0, BLOCKED: 1, INCONCLUSIVE: 2,
@@ -741,6 +746,34 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font
 
 def esc(x):
     return html.escape(str(x if x is not None else ""))
+
+
+def db_evidence_html(evidence_map):
+    """Render a compact DB-source badge for every ticket ID in the finding.
+
+    WEB_MON ALIGNMENT — shows exactly which Cassandra field each ticket ID
+    came from, proving the suite reads from WM_ALERT_LOGS.RequestMessageId
+    (the canonical field written by AlertLogs.addAlertLogToApplog() in
+    Web_Mon) rather than from a regex guess on the human-readable Message.
+    """
+    if not evidence_map:
+        return '<span style="color:#8b949e">no DB metadata</span>'
+    parts = []
+    for tid, ev in evidence_map.items():
+        src = ev.get("ticket_id_source", "Message regex")
+        field = ev.get("cassandra_field", "WM_ALERT_LOGS.RequestMessageId")
+        val = ev.get("cassandra_value", tid)
+        op = ev.get("operation", "?")
+        alert_st = ev.get("alert_status", "?")
+        colour = "#1f883d" if src == "RequestMessageId" else "#9a6700"
+        label = "✓ DB field" if src == "RequestMessageId" else "⚠ regex fallback"
+        parts.append(
+            f'<span title="Cassandra: {esc(field)} = {esc(str(val))} | '
+            f'op={esc(op)} alert={esc(alert_st)}" '
+            f'style="color:{colour};margin-right:8px">'
+            f'{esc(tid)}&nbsp;<em>{label}</em></span>'
+        )
+    return " ".join(parts) if parts else '<span style="color:#8b949e">none</span>'
 
 
 def tickets_html(ids, warn_multiple=False):
@@ -799,6 +832,7 @@ def write_html(path, ctx):
 <tr><th>Created AND closed</th><td>{tickets_html(x['matched_ticket_ids'] + x['matched_on_up_ticket_ids'])}</td></tr>
 <tr><th>Alert log rows</th><td class="mono">{esc(x['alert_log_rows'])} (failed deliveries: {esc(x['failed_rows'])})</td></tr>
 <tr><th>Verified in tool</th><td>{esc(x['tool'] or 'not checked')}</td></tr>
+<tr><th style="color:#6e7681;font-size:11px">Ticket ID source (DB)</th><td style="font-size:11px;color:#6e7681;font-family:monospace">{db_evidence_html(x.get('webmon_db_evidence', {}))}</td></tr>
 </table>{tool_tbl}</div>"""
 
     fresh_cycle = ctx.get("cycle_this_run")

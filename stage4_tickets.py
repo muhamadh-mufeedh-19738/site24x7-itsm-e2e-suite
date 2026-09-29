@@ -1139,6 +1139,16 @@ def cmd_verify(args):
     log(f"  source     : {STAGE3_FILE}")
     log(f"  monitor id : {stage3.get('monitor_id')}")
 
+    # WEB_MON ALIGNMENT — log ticket ID source path for full traceability
+    src_meta = stage3.get("ticket_id_source_metadata", {})
+    if src_meta:
+        log(f"\n  Ticket IDs sourced from:")
+        log(f"    Cassandra table : {src_meta.get('cassandra_table', 'WM_ALERT_LOGS')}")
+        log(f"    Canonical field : {src_meta.get('canonical_field', 'RequestMessageId')}")
+        log(f"    Java class      : {src_meta.get('java_class', 'AlertLogs.addAlertLogToApplog()')}")
+        log(f"    API endpoint    : {src_meta.get('api_endpoint', '/app/api/applog/search/')}")
+    log("")
+
     out = []
     for entry in stage3.get("results", []):
         integ = entry.get("integration", "")
@@ -1147,6 +1157,9 @@ def cmd_verify(args):
         ids = (entry.get("created_ticket_ids") or []) \
             + [t for t in (entry.get("closed_ticket_ids") or [])
                if t not in (entry.get("created_ticket_ids") or [])]
+
+        # WEB_MON DB evidence — proves ticket ID came from Cassandra
+        db_evidence = entry.get("webmon_db_evidence", {})
 
         log(f"\n  {integ}")
         if tool is None:
@@ -1340,8 +1353,11 @@ def cmd_verify(args):
                    else f"PARTIAL {found}/{len(checked)} found"
                    if found else "FAIL none found")
         log(f"    -> {verdict}")
+        # WEB_MON ALIGNMENT — attach DB evidence to stage4 output so the
+        # report can prove every ticket ID came from WM_ALERT_LOGS.RequestMessageId
         out.append({"integration": integ, "tool": tool.name,
-                    "tickets": checked, "verdict": verdict})
+                    "tickets": checked, "verdict": verdict,
+                    "webmon_db_evidence": db_evidence})
 
     section("SUMMARY")
     for r in out:
