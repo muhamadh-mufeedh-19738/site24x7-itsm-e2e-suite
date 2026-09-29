@@ -1259,6 +1259,23 @@ def cmd_verify(args):
         row_times = entry.get("ticket_times") or {}
         anchors = load_anchors(getattr(args, "logreport", None))
         for tid in ids:
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — ServiceNow dual-ID handling
+            # ServiceNow.java writes:
+            #   sys_id  → RequestMessageId (32-char UUID, stored in Cassandra)
+            #   number  → Message text ("Ticket Id: INC0017961")
+            # stage3_verify.py now extracts INC number as the primary ticket
+            # ID (since stage4 get_ticket() searches by INC number). The
+            # sys_id is stored in ticket_times[tid]["sn_sys_id"].
+            # We look up by INC number; sys_id is logged for DB traceability.
+            # ----------------------------------------------------------------
+            meta_for_tid = row_times.get(str(tid)) or {}
+            sn_sys_id = meta_for_tid.get("sn_sys_id")
+            if sn_sys_id and isinstance(tool, ServiceNow):
+                log(f"    [DB ] ServiceNow sys_id (Cassandra RequestMessageId)"
+                    f" = {sn_sys_id}")
+                log(f"          human-readable INC number = {tid} "
+                    f"(used for stage4 lookup)")
             res = tool.get_ticket(tid)
             if res.get("found"):
                 log(f"    [OK ] ticket {tid}  status={res.get('status')}  "

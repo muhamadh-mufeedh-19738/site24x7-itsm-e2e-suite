@@ -765,11 +765,24 @@ def db_evidence_html(evidence_map):
         val = ev.get("cassandra_value", tid)
         op = ev.get("operation", "?")
         alert_st = ev.get("alert_status", "?")
-        colour = "#1f883d" if src == "RequestMessageId" else "#9a6700"
-        label = "✓ DB field" if src == "RequestMessageId" else "⚠ regex fallback"
+        sn_sys_id = ev.get("sn_sys_id")  # ServiceNow: internal UUID
+        # ── Source colour logic ─────────────────────────────────────────────
+        # Green  = read directly from RequestMessageId (canonical DB field)
+        # Amber  = regex fallback on Message text
+        # Blue   = ServiceNow INC# extracted from Message (sys_id in DB)
+        if "SN INC#" in src:
+            colour = "#0969da"   # blue — SN-specific dual-ID path
+            label = "✓ SN INC# (sys_id in DB)"
+        elif src == "RequestMessageId":
+            colour = "#1f883d"   # green — canonical DB field
+            label = "✓ DB field"
+        else:
+            colour = "#9a6700"   # amber — regex fallback
+            label = "⚠ regex fallback"
+        sys_id_hint = (f" | sys_id={esc(sn_sys_id)}" if sn_sys_id else "")
         parts.append(
             f'<span title="Cassandra: {esc(field)} = {esc(str(val))} | '
-            f'op={esc(op)} alert={esc(alert_st)}" '
+            f'op={esc(op)} alert={esc(alert_st)}{sys_id_hint}" '
             f'style="color:{colour};margin-right:8px">'
             f'{esc(tid)}&nbsp;<em>{label}</em></span>'
         )

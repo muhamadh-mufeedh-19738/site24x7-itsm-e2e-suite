@@ -63,6 +63,30 @@ TIMEOUT = 45
 TICKET_RE = re.compile(r"ticket\s*id\s*[:=]?\s*([A-Za-z0-9\-_]+)", re.I)
 
 # ---------------------------------------------------------------------------
+# WEB_MON ALIGNMENT — ServiceNow.java (source/server/.../ticketing/ServiceNow.java)
+# ServiceNow stores TWO identifiers per ticket:
+#   sys_id   = internal UUID (e.g. "a1b2c3d4e5f6...") → stored in Cassandra
+#              as RequestMessageId via updateCurrentStatusObject()
+#   number   = human-readable INC number (e.g. "INC0017961") → written to
+#              the Message text via ALERTLOG_CREATE_KEY_TICKET + ticketId
+#
+# The product writes to AlertLogs:
+#   RequestMessageId = sys_id      (the internal UUID for API calls)
+#   Message text     = "... (Operation : Create , Ticket Id: INC0017961)"
+#
+# Our stage4_tickets.py ServiceNow.get_ticket() searches by INC NUMBER,
+# not sys_id — so we must use the INC number as our canonical ticket ID
+# for lookup and display.
+#
+# RESOLUTION:
+#   - If Message text contains "INC" number → that is our primary ticket ID
+#   - RequestMessageId (sys_id) is stored separately as db_sys_id
+#   - This aligns with what stage4 can actually look up
+# ---------------------------------------------------------------------------
+SN_NUMBER_RE = re.compile(r"\b(INC\d+|CHG\d+|PRB\d+|TASK\d+|RITM\d+)\b", re.I)
+SN_SYS_ID_RE = re.compile(r"\b([0-9a-f]{32})\b", re.I)  # 32-char hex UUID
+
+# ---------------------------------------------------------------------------
 # WEB_MON ALIGNMENT — AlertLogs.java source of truth
 # ---------------------------------------------------------------------------
 # The canonical ticket ID field in Site24x7's alert log (Cassandra /
@@ -667,15 +691,47 @@ def cmd_verify(args):
                        or "")
             raw_tid = str(raw_tid).strip() if raw_tid else ""
 
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — ServiceNow dual-ID handling
+            # ServiceNow.java writes TWO identifiers:
+            #   sys_id  → RequestMessageId (32-char hex UUID, for API calls)
+            #   number  → Message text as "Ticket Id: INC0017961"
+            #
+            # stage4_tickets.py ServiceNow.get_ticket() searches by INC
+            # number, NOT sys_id. So we must use the INC number as the
+            # canonical ticket ID for display and lookup, and store sys_id
+            # separately as evidence of the DB write.
+            # ----------------------------------------------------------------
+            db_sys_id = None
             if raw_tid and raw_tid.lower() not in _BOGUS_TICKET_IDS:
-                # PRIMARY: use RequestMessageId directly — Web_Mon ground truth
-                ticket_from_db = raw_tid
-                tid_source = "RequestMessageId"
+                # Check if RequestMessageId is a sys_id (32-char hex UUID)
+                if SN_SYS_ID_RE.match(raw_tid) and len(raw_tid) == 32:
+                    # It's a ServiceNow sys_id — store it but look for INC#
+                    db_sys_id = raw_tid
+                    # Try to find human-readable INC number in Message text
+                    sn_match = SN_NUMBER_RE.search(msg)
+                    if sn_match:
+                        ticket_from_db = sn_match.group(1).upper()
+                        tid_source = "SN INC# from Message (sys_id in RequestMessageId)"
+                    else:
+                        # No INC# in message — use sys_id as fallback
+                        ticket_from_db = raw_tid
+                        tid_source = "RequestMessageId (sys_id)"
+                else:
+                    # Non-UUID: INC number or other tool's ticket ID directly
+                    ticket_from_db = raw_tid
+                    tid_source = "RequestMessageId"
             else:
                 # FALLBACK: regex on the human-readable Message field
-                tid_match = TICKET_RE.search(msg)
-                ticket_from_db = tid_match.group(1) if tid_match else None
-                tid_source = "Message regex"
+                # Try ServiceNow INC number first, then generic ticket id
+                sn_match = SN_NUMBER_RE.search(msg)
+                if sn_match:
+                    ticket_from_db = sn_match.group(1).upper()
+                    tid_source = "SN INC# from Message regex"
+                else:
+                    tid_match = TICKET_RE.search(msg)
+                    ticket_from_db = tid_match.group(1) if tid_match else None
+                    tid_source = "Message regex"
 
             if op and ticket_from_db:
                 kind, ticket = op.group(1).lower(), ticket_from_db
@@ -711,6 +767,9 @@ def cmd_verify(args):
                     "ticket_id_source": tid_source,
                     # Raw RequestMessageId from the DB for traceability
                     "RequestMessageId": raw_tid if raw_tid else None,
+                    # ServiceNow: sys_id stored separately (32-char UUID)
+                    # stage4 uses INC number for lookup; sys_id is internal
+                    "sn_sys_id": db_sys_id,
                 }
                 # Some tools (e.g. Zoho Desk) resolve by UPDATING the ticket
                 # on recovery rather than issuing a Close. Treat an update
@@ -776,19 +835,29 @@ def cmd_verify(args):
             if not op2:
                 continue
             # WEB_MON ALIGNMENT — read RequestMessageId first (primary DB field)
+            # ServiceNow: sys_id goes into RequestMessageId; INC# is in Message
             raw_tid2 = (e.get("RequestMessageId")
                         or e.get("requestmessageid")
                         or e.get("requestMessageId")
                         or "")
             raw_tid2 = str(raw_tid2).strip() if raw_tid2 else ""
             if raw_tid2 and raw_tid2.lower() not in _BOGUS_TICKET_IDS:
-                ticket2 = raw_tid2
+                if SN_SYS_ID_RE.match(raw_tid2) and len(raw_tid2) == 32:
+                    # ServiceNow sys_id — look for INC# in Message
+                    sn2 = SN_NUMBER_RE.search(msg)
+                    ticket2 = sn2.group(1).upper() if sn2 else raw_tid2
+                else:
+                    ticket2 = raw_tid2
             else:
-                # Fallback: regex on Message text (only if DB field absent)
-                tid2 = TICKET_RE.search(msg)
-                if not tid2:
-                    continue
-                ticket2 = tid2.group(1)
+                # Fallback: ServiceNow INC# first, then generic regex
+                sn2 = SN_NUMBER_RE.search(msg)
+                if sn2:
+                    ticket2 = sn2.group(1).upper()
+                else:
+                    tid2 = TICKET_RE.search(msg)
+                    if not tid2:
+                        continue
+                    ticket2 = tid2.group(1)
                 if ticket2.lower() in _BOGUS_TICKET_IDS:
                     continue
             if ticket2 not in created:
