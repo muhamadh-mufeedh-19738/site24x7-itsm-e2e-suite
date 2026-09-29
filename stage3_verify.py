@@ -62,6 +62,70 @@ TIMEOUT = 45
 
 TICKET_RE = re.compile(r"ticket\s*id\s*[:=]?\s*([A-Za-z0-9\-_]+)", re.I)
 
+# ---------------------------------------------------------------------------
+# WEB_MON ALIGNMENT — AlertLogs.java source of truth
+# ---------------------------------------------------------------------------
+# The canonical ticket ID field in Site24x7's alert log (Cassandra /
+# AppLog) is  RequestMessageId  — written by AlertLogs.addAlertLogToApplog()
+# at the line:
+#     if(prop.get("ticket_id") != null) {
+#         jsonObject.put("RequestMessageId", (String)prop.get("ticket_id"));
+#     }
+# The human-readable "Message" field ALSO contains "ticket id: <ID>" in
+# the log line, but reading RequestMessageId directly is safer and is
+# exactly what the product writes.  We read RequestMessageId first and
+# fall back to the regex on Message only when the field is absent.
+#
+# CommunicationMode integer → integration type (from ThirdPartyServices enum
+# in AlertLogs.java → getAlertModeName()):
+#   5  = AlarmsOne        6  = SDPOD (ServiceDesk Plus OD)
+#   7  = Slack            8  = Slack (alt)       9  = PagerDuty
+#   10 = SDP on-premise   11 = Custom Webhook    13 = Microsoft Teams
+#   14 = ServiceNow       15 = OpsGenie          17 = iLert
+#   18 = JSM Ops          19 = SDPMSP            21 = ConnectWise
+#   22 = Zapier           23 = Jira              24 = Zoho Desk (ZDESK)
+#   25 = Zoho Cliq        26 = EventBridge       27 = Telegram
+#   29 = FreshService     30 = VictorOps         31 = FreshDesk
+#   32 = Zendesk          33 = Discord           52 = HaloITSM
+#
+# To field: written by AlertLogs.addAlertLogToApplog():
+#     tpJsonArray.add(prop.get("integration_name"));
+#     jsonObject.put("To", tpJsonArray);
+# It is a JSON array — our as_list() handles both array and string forms.
+#
+# Status field:
+#     jsonObject.put("Status", prop.get("monitor_status"));
+# Values: 0=DOWN, 1=UP (AVAILABLE), 2=TROUBLE, 3=CRITICAL
+# ---------------------------------------------------------------------------
+
+MODE_INT_TO_TOOL = {
+    5:  "alarmsone",
+    6:  "sdp",          # SDPOD — ServiceDesk Plus On Demand
+    7:  "slack",
+    9:  "pagerduty",
+    10: "sdp_onprem",
+    11: "webhook",
+    13: "msteams",
+    14: "servicenow",
+    15: "opsgenie",
+    17: "ilert",
+    18: "jsmops",
+    19: "sdpmsp",
+    21: "connectwise",
+    22: "zapier",
+    23: "jira",
+    24: "zohodesk",     # ZDESK
+    25: "zcliq",
+    26: "eventbridge",
+    27: "telegram",
+    29: "freshservice",
+    30: "victorops",
+    31: "freshdesk",
+    32: "zendesk",
+    33: "discord",
+    52: "haloitsm",
+}
+
 # Ticket IDs that are obviously not real IDs and must be discarded.
 # "null" appears in SDP alert log rows when the integration fires but the
 # ticket ID has not yet been written back into the log (the ticket was
@@ -522,12 +586,35 @@ def cmd_verify(args):
     # ---- group per integration ----------------------------------------
     per = {}
     for e in rows:
-        msg = str(e.get("message", ""))
-        st_code = str(e.get("status", ""))
+        # ------------------------------------------------------------------
+        # WEB_MON ALIGNMENT — AlertLogs.java field names (canonical casing)
+        # "Message"           → the human-readable alert text
+        # "Status"            → monitor_status int (0=DOWN,1=UP,2=TROUBLE)
+        # "To"                → integration_name JSON array
+        # "CommunicationMode" → delivery mode integer (ThirdPartyServices enum)
+        # "RequestMessageId"  → ticket ID written by the notifier
+        # We check both the product's casing AND lowercase for resilience.
+        # ------------------------------------------------------------------
+        msg = str(e.get("Message") or e.get("message") or "")
+        st_code = str(e.get("Status") or e.get("status") or "")
         st_txt = ALERT_STATUS.get(st_code, st_code)
         blob = (msg + " " + json.dumps(e)).lower()
 
-        for dest in (as_list(e.get("to")) or ["(unknown)"]):
+        # CommunicationMode integer → record for tool mapping
+        comm_mode_raw = (e.get("CommunicationMode")
+                         or e.get("communicationmode")
+                         or e.get("alert_mode")
+                         or e.get("alertmode"))
+        comm_mode_int = None
+        if comm_mode_raw is not None:
+            try:
+                comm_mode_int = int(comm_mode_raw)
+            except (ValueError, TypeError):
+                pass
+
+        # To field — integration name (JSON array per Web_Mon)
+        to_field = (e.get("To") or e.get("to"))
+        for dest in (as_list(to_field) or ["(unknown)"]):
             rec = per.setdefault(dest, {"rows": 0, "create": set(),
                                         "close": set(), "update": set(),
                                         "closed_on_up": set(),
@@ -537,19 +624,26 @@ def cmd_verify(args):
             rec["rows"] += 1
             rec["statuses"].add(st_txt)
 
-            # Site24x7 tells us which TOOL each row was delivered to, in
-            # communicationmode ("Service-now", "Zoho Desk", ...). That is
-            # authoritative. Guessing the tool from the integration NAME
-            # breaks the moment somebody names a ServiceNow integration
-            # "Snow HALO Sanity" -- the word HALO wins and we log into the
-            # wrong product.
-            for k in ("communicationmode", "alert_mode", "alertmode"):
-                v = e.get(k)
-                if v:
-                    for m in as_list(v):
-                        if m:
-                            rec["modes"].add(str(m))
-                    break
+            # Site24x7 tells us which TOOL each row was delivered to via
+            # CommunicationMode (canonical Web_Mon field name from
+            # AlertLogs.java: jsonObject.put("CommunicationMode", alertType))
+            # This is an INTEGER matching ThirdPartyServices enum.
+            # We record BOTH the integer (for MODE_INT_TO_TOOL lookup) and
+            # any string form present for backward compatibility.
+            if comm_mode_int is not None:
+                rec["modes"].add(str(comm_mode_int))     # integer form
+                tool_key = MODE_INT_TO_TOOL.get(comm_mode_int)
+                if tool_key:
+                    rec["modes"].add(tool_key)           # human-readable too
+            else:
+                for k in ("CommunicationMode", "communicationmode",
+                          "alert_mode", "alertmode"):
+                    v = e.get(k)
+                    if v:
+                        for m in as_list(v):
+                            if m:
+                                rec["modes"].add(str(m))
+                        break
             if ("fail" in blob or "invalid" in blob
                     or "error" in blob):
                 rec["failed"] += 1
@@ -559,15 +653,39 @@ def cmd_verify(args):
                 # recovery was actually delivered.
                 rec["failed_statuses"].add(st_txt)
             op = OP_RE.search(msg)
-            tid = TICKET_RE.search(msg)
-            if op and tid:
-                kind, ticket = op.group(1).lower(), tid.group(1)
+
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — AlertLogs.java  addAlertLogToApplog()
+            # PRIMARY source:  RequestMessageId  (canonical field written by
+            #   the product — "jsonObject.put("RequestMessageId", ticket_id)")
+            # FALLBACK source: TICKET_RE regex on Message text
+            # This order matches the product's own write path exactly.
+            # ----------------------------------------------------------------
+            raw_tid = (e.get("RequestMessageId")
+                       or e.get("requestmessageid")
+                       or e.get("requestMessageId")
+                       or "")
+            raw_tid = str(raw_tid).strip() if raw_tid else ""
+
+            if raw_tid and raw_tid.lower() not in _BOGUS_TICKET_IDS:
+                # PRIMARY: use RequestMessageId directly — Web_Mon ground truth
+                ticket_from_db = raw_tid
+                tid_source = "RequestMessageId"
+            else:
+                # FALLBACK: regex on the human-readable Message field
+                tid_match = TICKET_RE.search(msg)
+                ticket_from_db = tid_match.group(1) if tid_match else None
+                tid_source = "Message regex"
+
+            if op and ticket_from_db:
+                kind, ticket = op.group(1).lower(), ticket_from_db
                 # Discard bogus IDs like "null" — they appear in SDP rows
                 # when the ticket has been queued but not yet confirmed, and
                 # they produce evidence that cannot be looked up in any tool.
                 if ticket.lower() in _BOGUS_TICKET_IDS:
                     log(f"  [note] ignoring bogus ticket id {ticket!r} in "
-                        f"row for {dest} (operation={kind}, status={st_txt})")
+                        f"row for {dest} (operation={kind}, status={st_txt}, "
+                        f"source={tid_source})")
                     continue
                 rec[kind].add(ticket)
 
@@ -589,6 +707,10 @@ def cmd_verify(args):
                     "operation": kind,
                     "status": st_txt,
                     "alert_row_time_raw": when,
+                    # Web_Mon ground truth: which field was the source?
+                    "ticket_id_source": tid_source,
+                    # Raw RequestMessageId from the DB for traceability
+                    "RequestMessageId": raw_tid if raw_tid else None,
                 }
                 # Some tools (e.g. Zoho Desk) resolve by UPDATING the ticket
                 # on recovery rather than issuing a Close. Treat an update

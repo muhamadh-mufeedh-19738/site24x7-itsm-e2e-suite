@@ -738,20 +738,47 @@ def build_tools():
 # Site24x7's own "Alert Mode" / communicationmode value -> adapter key.
 # This is what the product says the row was delivered to, so it beats any
 # guess made from the integration's name.
+# ---------------------------------------------------------------------------
+# WEB_MON ALIGNMENT — AlertLogs.java / ThirdPartyServices enum
+# CommunicationMode INTEGER → tool adapter key
+# This is the PRIMARY lookup — integer beats name-based guessing.
+# Source: AlertLogs.java getAlertModeName() + ThirdPartyServices enum
+# ---------------------------------------------------------------------------
+MODE_INT_TO_TOOL = {
+    6:  "sdp",          # SDPOD — ServiceDesk Plus On Demand
+    9:  "pagerduty",    # PagerDuty
+    14: "servicenow",   # ServiceNow
+    24: "zohodesk",     # ZDESK — Zoho Desk
+    52: "halo",         # HaloITSM
+    15: "opsgenie",     # OpsGenie (no adapter yet)
+    23: "jira",         # Jira (no adapter yet)
+    29: "freshservice", # FreshService (no adapter yet)
+}
+
+# String-based fallback — used when CommunicationMode is absent or non-int.
+# Kept for backward compatibility with older snapshots.
 MODE_TO_TOOL = {
-    "service-now": "servicenow",
-    "servicenow": "servicenow",
-    "snow": "servicenow",
-    "zoho desk": "zohodesk",
-    "zohodesk": "zohodesk",
+    "service-now":            "servicenow",
+    "servicenow":             "servicenow",
+    "snow":                   "servicenow",
+    "zoho desk":              "zohodesk",
+    "zohodesk":               "zohodesk",
+    "zdesk":                  "zohodesk",
     "servicedesk plus cloud": "sdp",
-    "servicedesk plus": "sdp",
-    "sdp": "sdp",
-    "haloitsm": "halo",
-    "halo itsm": "halo",
-    "halo": "halo",
-    "pagerduty": "pagerduty",
-    "pagerduty automation": "pagerduty",
+    "servicedesk plus":       "sdp",
+    "sdpod":                  "sdp",
+    "sdp":                    "sdp",
+    "haloitsm":               "halo",
+    "halo itsm":              "halo",
+    "halo":                   "halo",
+    "pagerduty":              "pagerduty",
+    "pager duty":             "pagerduty",
+    # integer strings — from stage3 storing comm_mode_int as str
+    "6":                      "sdp",
+    "9":                      "pagerduty",
+    "14":                     "servicenow",
+    "24":                     "zohodesk",
+    "52":                     "halo",
 }
 
 # Delivery modes that are real, but are NOT ticketing tools. There will
@@ -918,32 +945,53 @@ def match_anchor(ticket_dt, anchors, max_lag=300, max_early=60):
 def pick_tool(integration_name, tools, delivery_modes=None):
     """Choose the ITSM adapter for an integration.
 
-    Prefer Site24x7's OWN delivery mode. Matching on the integration name
-    is a trap: an account can name its ServiceNow integration
-    "Snow HALO Sanity", and a name-based match sees "HALO" and logs into
-    entirely the wrong product. That is exactly what happened, and every
-    downstream verdict was wrong because of it.
+    WEB_MON ALIGNMENT — AlertLogs.java / ThirdPartyServices enum
+    =============================================================
+    STEP 1: Try CommunicationMode INTEGER (most reliable — written by
+            AlertLogs.addAlertLogToApplog() as jsonObject.put("CommunicationMode", alertType))
+            This is the product's OWN authoritative delivery-type field.
+    STEP 2: Try string mode names (fallback for older snapshots).
+    STEP 3: Check NON_TICKETING_MODES so channels like Slack / webhook
+            are correctly excluded rather than mapped to a wrong adapter.
+    STEP 4: Name-based heuristic (last resort only).
+
+    Matching on the integration NAME alone is a trap: an account can name
+    its ServiceNow integration "Snow HALO Sanity" and a name-based match
+    would log into HaloITSM instead — producing completely wrong verdicts.
     """
+    # STEP 1 — integer CommunicationMode (Web_Mon ground truth)
+    for m in (delivery_modes or []):
+        try:
+            mode_int = int(m)
+            key = MODE_INT_TO_TOOL.get(mode_int)
+            if key:
+                return tools.get(key)
+        except (ValueError, TypeError):
+            pass
+
+    # STEP 2 — string mode names (backward compat)
     for m in (delivery_modes or []):
         key = MODE_TO_TOOL.get(str(m).strip().lower())
         if key:
             return tools.get(key)
 
+    # STEP 3 — non-ticketing channel → no adapter, not a failure
     for m in (delivery_modes or []):
         if str(m).strip().lower() in NON_TICKETING_MODES:
-            return None          # correctly has no adapter
+            return None
 
-    # No usable mode recorded -- fall back to the name, most specific first
-    # so that "Snow HALO Sanity" resolves to ServiceNow, not HALO.
+    # STEP 4 — name heuristic (last resort only, most specific first)
     n = (integration_name or "").lower()
-    if "servicedesk" in n or "sdp" in n:
+    if "servicedesk" in n or "sdp" in n or "sdpod" in n:
         return tools["sdp"]
     if "snow" in n or "servicenow" in n or "service-now" in n:
         return tools["servicenow"]
-    if "desk" in n or "zoho" in n:
-        return tools["zohodesk"]
     if "halo" in n:
         return tools["halo"]
+    if "desk" in n or "zoho" in n:
+        return tools["zohodesk"]
+    if "pager" in n or "pagerduty" in n:
+        return tools.get("pagerduty")
     return None
 
 
