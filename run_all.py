@@ -463,26 +463,61 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                     + caveat)
 
         if delivered:
-            headline = ("Recovery alert WAS delivered, but the ticket "
-                        "was still not closed")
-            evidence = (
-                f"Site24x7 created a ticket on the problem alert "
-                f"({', '.join(map(str, created)) or 'id not in logs'}) and "
-                f"then delivered the recovery: an UP row for this integration "
-                f"appears in the alert logs for the same cycle. The tool "
-                f"accepted that recovery but issued no Close and no Update "
-                f"against the ticket. Other integrations in the same cycle "
-                f"logged 'Operation : Close' or 'Operation : Update' for the "
-                f"identical recovery alert, so the fault is on the "
-                f"integration's side, not in Site24x7's delivery."
-                + state_note)
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — ServiceNow.java addNotes() line 892:
+            #   if(status != Constants.UP) {
+            #       alertLogMsg += ALERTLOG_UPDATE_KEY_TICKET + ticketId + ")";
+            #   }
+            # When status==UP, the UP work-note row has NO "Operation:Update"
+            # tag and no ticket id appended to the message. So stage3 sees
+            # an UP row with no operation — which we now correctly treat as
+            # an implicit update-on-UP. If the verdict here is STILL
+            # "FAIL never closed" despite an UP row being delivered, it means
+            # the stage3 up_update_candidates second pass did NOT find a
+            # matching create — i.e. the ticket from the UP row was created
+            # in a PREVIOUS cycle. That is the real product finding.
+            # ----------------------------------------------------------------
+            integ_name = stage3_entry.get("integration", "")
+            is_sn = "servicenow" in integ_name.lower() or "service now" in integ_name.lower()
+            if is_sn:
+                headline = ("Recovery alert delivered — UP work-note added, "
+                            "but ticket not closed/resolved")
+                evidence = (
+                    f"Site24x7 created a ticket ({', '.join(map(str, created)) or 'id not in logs'}) "
+                    f"and delivered the UP recovery alert. ServiceNow received "
+                    f"the UP work-note (Web_Mon calls addNotes() on recovery — "
+                    f"the UP row intentionally has no 'Operation : Update' tag "
+                    f"per ServiceNow.java line 892). However the ticket was NOT "
+                    f"moved to Resolved/Closed state. This is a real ServiceNow "
+                    f"integration finding: the 'action_on_availability' setting "
+                    f"controls whether recovery closes the ticket. Current setting "
+                    f"may be MANUAL_CLOSE(0) — check the integration config in "
+                    f"Site24x7 → Third-Party Integrations → ServiceNow → "
+                    f"'Action on Recovery'."
+                    + state_note)
+            else:
+                headline = ("Recovery alert WAS delivered, but the ticket "
+                            "was still not closed")
+                evidence = (
+                    f"Site24x7 created a ticket on the problem alert "
+                    f"({', '.join(map(str, created)) or 'id not in logs'}) and "
+                    f"then delivered the recovery: an UP row for this integration "
+                    f"appears in the alert logs for the same cycle. The tool "
+                    f"accepted that recovery but issued no Close and no Update "
+                    f"against the ticket. Other integrations in the same cycle "
+                    f"logged 'Operation : Close' or 'Operation : Update' for the "
+                    f"identical recovery alert, so the fault is on the "
+                    f"integration's side, not in Site24x7's delivery."
+                    + state_note)
         else:
-            headline = "Ticket created but NEVER closed on recovery"
+            headline = "Ticket created but UP alert NOT delivered"
             evidence = (
                 f"Site24x7 delivered the problem alert and a ticket was "
                 f"created ({', '.join(map(str, created)) or 'id not in logs'}), "
-                f"but no recovery row for this integration appears in the "
-                f"alert logs, and the ticket was never closed or resolved."
+                f"but NO UP/recovery row for this integration appears in the "
+                f"alert logs — the recovery alert was never sent to this "
+                f"integration. Check the integration's 'Send Recovery Alert' "
+                f"setting in Site24x7 → Third-Party Integrations."
                 + state_note)
         return (bucket, headline,
                 (note + " " if note else "") + evidence + caveat)

@@ -733,6 +733,56 @@ def cmd_verify(args):
                     ticket_from_db = tid_match.group(1) if tid_match else None
                     tid_source = "Message regex"
 
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — ServiceNow.java addNotes() line 892:
+            #
+            #   if(status != Constants.UP) {
+            #       alertLogMsg = alertLogMsg +
+            #                     ALERTLOG_UPDATE_KEY_TICKET + ticketId + ")";
+            #   }
+            #
+            # When status==UP, the UP work-note row does NOT append the
+            # "( Operation : Update , Ticket Id: INCxxxxxxx)" suffix.
+            # So OP_RE finds no operation in the UP row — but the UP alert
+            # WAS successfully delivered (the row exists, not failed).
+            #
+            # Similarly, closeRequest() writes the ticket id only when the
+            # HTTP call to ServiceNow succeeds. If the close state is
+            # MANUAL_CLOSE(0) the close row is also omitted.
+            #
+            # FIX: for any UP-status row that has no OP_RE match but DOES
+            # have a ticket ID (from RequestMessageId or Message), treat it
+            # as an implicit "update on UP" for that ticket. This matches
+            # exactly what the product does — it POSTs a work-note to the
+            # ticket on recovery, proving both delivery AND that the ticket
+            # was acted on. We record it as "update" so the lifecycle
+            # (create + update@UP) can complete correctly.
+            # ----------------------------------------------------------------
+            if not op and st_txt == "UP" and ticket_from_db:
+                ticket = ticket_from_db
+                if ticket.lower() not in _BOGUS_TICKET_IDS:
+                    rec["update"].add(ticket)
+                    rec.setdefault("up_update_candidates", set()).add(ticket)
+                    log(f"  [note] {dest}: UP row has no Operation tag "
+                        f"(Web_Mon ServiceNow.addNotes skips ticket id on UP) "
+                        f"— treating as implicit update-on-UP for {ticket!r}")
+                    when2 = None
+                    for k in ("_zl_timestamp", "_zl_received_time",
+                              "alert_time", "time", "timestamp",
+                              "_zlf__zl_timestamp"):
+                        if e.get(k):
+                            when2 = e.get(k)
+                            break
+                    rec.setdefault("ticket_times", {})[ticket] = {
+                        "operation": "update",
+                        "status": st_txt,
+                        "alert_row_time_raw": when2,
+                        "ticket_id_source": tid_source + " (UP implicit)",
+                        "RequestMessageId": raw_tid if raw_tid else None,
+                        "sn_sys_id": db_sys_id,
+                    }
+                continue
+
             if op and ticket_from_db:
                 kind, ticket = op.group(1).lower(), ticket_from_db
                 # Discard bogus IDs like "null" — they appear in SDP rows
@@ -831,9 +881,12 @@ def cmd_verify(args):
                     e.get("To") or e.get("to"))]:
                 continue
             msg = str(e.get("Message") or e.get("message") or "")
+            st2_code_ow = str(e.get("Status") or e.get("status") or "")
+            st2_ow = ALERT_STATUS.get(st2_code_ow, st2_code_ow)
             op2 = OP_RE.search(msg)
-            if not op2:
-                continue
+            # WEB_MON ALIGNMENT — ServiceNow UP rows have no Operation tag
+            # (addNotes skips the ticket id suffix when status==UP).
+            # Handle them the same way as inside-window rows above.
             # WEB_MON ALIGNMENT — read RequestMessageId first (primary DB field)
             # ServiceNow: sys_id goes into RequestMessageId; INC# is in Message
             raw_tid2 = (e.get("RequestMessageId")
@@ -862,15 +915,23 @@ def cmd_verify(args):
                     continue
             if ticket2 not in created:
                 continue                      # not ours, ignore
-            st2_code = str(e.get("Status") or e.get("status") or "")
-            st2 = ALERT_STATUS.get(st2_code, st2_code)
+            # UP row with no operation tag (ServiceNow addNotes behaviour)
+            if not op2 and st2_ow == "UP":
+                updated.add(ticket2)
+                on_up.add(ticket2)
+                late += 1
+                log(f"  [note] {name}: outside-window UP row with no "
+                    f"Operation tag — implicit update-on-UP for {ticket2!r}")
+                continue
+            if not op2:
+                continue
             kind2 = op2.group(1).lower()
             if kind2 == "close":
                 closed.add(ticket2)
                 late += 1
             elif kind2 == "update":
                 updated.add(ticket2)
-                if st2 == "UP":
+                if st2_ow == "UP":
                     on_up.add(ticket2)
                 late += 1
         if late:
