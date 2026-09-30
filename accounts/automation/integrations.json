@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-28T16:08:15.210Z",
+  "captured_at": "2026-09-30T08:40:59.537Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
@@ -28,28 +28,6 @@
         "service_status": 0,
         "name": "Desk Automation",
         "to_email_id": "support@salsuisqueen.localzohodesk.com"
-      }
-    },
-    {
-      "name": "HALO Automation",
-      "type": null,
-      "type_id": "43",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "1",
-        "down_alert": true,
-        "credential_profile_id": "73970000002743001",
-        "manual_resolve": false,
-        "type": 43,
-        "title": "$MONITORNAME is $STATUS",
-        "url": "https://salsucommoditites.haloitsm.com",
-        "selection_type": 0,
-        "credential_type": "1",
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "73970000002743002",
-        "service_status": 0,
-        "name": "HALO Automation"
       }
     },
     {
@@ -103,10 +81,11 @@
         "portal_name": "Site24x7_124304490",
         "sendClearAlerts": "0",
         "down_alert": true,
-        "subject": "$MONITORNAME is $STATUS",
         "oauth2_provider_id": "73970000002868055",
+        "subject": "$MONITORNAME is $STATUS",
         "module": "1",
         "manual_resolve": false,
+        "problem_alert": false,
         "type": 4,
         "manual": false,
         "selection_type": 0,

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-20T17:04:05.016Z",
+  "captured_at": "2026-09-29T09:09:34.893Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
@@ -9,9 +9,8 @@
       "name": "Added Via Ext",
       "type": null,
       "type_id": "1",
-      "status": null,
+      "status": "Active",
       "raw": {
-        "service_key": "506aebac3695420bd0bef7b1e7f0c9ba",
         "sendClearAlerts": "0",
         "down_alert": true,
         "sender_name": "Site24x7",
@@ -30,7 +29,7 @@
       "name": "Halo Alternate Notification Check",
       "type": null,
       "type_id": "43",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "1",
         "down_alert": true,
@@ -55,7 +54,7 @@
       "name": "HALO new add check",
       "type": null,
       "type_id": "11",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "down_alert": true,
@@ -81,7 +80,7 @@
       "name": "HALO New Add check",
       "type": null,
       "type_id": "43",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "1",
         "down_alert": true,
@@ -103,7 +102,7 @@
       "name": "https://integrations-qa.localsite24x7.com/app/client?a=f#/home/monitors",
       "type": null,
       "type_id": "16",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "manager": "Site24x7",
@@ -115,7 +114,6 @@
         "url": "https://integrations-qa.localsite24x7.com/app/client?a=f#/home/monitors",
         "timeout": "30",
         "selection_type": 0,
-        "authorization": "SXCOeL+GY/o0Sc23CIGZOA==",
         "trouble_alert": false,
         "critical_alert": false,
         "service_id": "45233000020310010",
@@ -128,7 +126,7 @@
       "name": "New Ah add pannen",
       "type": null,
       "type_id": "16",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "manager": "Site24x7",
@@ -140,7 +138,6 @@
         "url": "https://integrations-qa.localsite24x7.com/app/client?a=f#/home/monitors",
         "timeout": "30",
         "selection_type": 0,
-        "authorization": "BMbrZ15meAbHVLlNoNtsGg==",
         "trouble_alert": false,
         "critical_alert": false,
         "service_id": "45233000020310012",
@@ -153,9 +150,8 @@
       "name": "OpManager SMT",
       "type": null,
       "type_id": "1",
-      "status": null,
+      "status": "Active",
       "raw": {
-        "service_key": "b60dd3ea8f474f00d00aa52dc3f20cba",
         "sendClearAlerts": "0",
         "down_alert": true,
         "sender_name": "Site24x7",
@@ -176,10 +172,9 @@
       "name": "Pager Duty Add Check",
       "type": null,
       "type_id": "1",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
-        "service_key": "7iknHSMRs+mD8InBu85p8owzaWUFozIPaVAXp2fBCWFeviusxssXvXnXfzGkSgSWGtG51B1zvpCaScKHZWvnVw==",
         "down_alert": true,
         "sender_name": "Site24x7",
         "problem_alert": false,
@@ -199,7 +194,7 @@
       "name": "Snow",
       "type": null,
       "type_id": "11",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "down_alert": true,
@@ -228,7 +223,7 @@
       "name": "TPT",
       "type": null,
       "type_id": "16",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "manager": "Site24x7",
@@ -240,7 +235,6 @@
         "url": "https://integrations-qa.localsite24x7.com/app/client?a=f#/home/monitors",
         "timeout": "30",
         "selection_type": 0,
-        "authorization": "BMbrZ15meAb9RWT8V8TK9Q==",
         "trouble_alert": false,
         "critical_alert": false,
         "service_id": "45233000020310011",
@@ -253,10 +247,9 @@
       "name": "UAG Test",
       "type": null,
       "type_id": "1",
-      "status": null,
+      "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
-        "service_key": "TwlpbPljL6RzpF+Qu+1cc/KX/BNud4AardoOsLnCU717hoxdJ1/1MqHzR7rS8ysJAYpwON84xy8PnBl5j9PqzfB3sUMTUWvugQFP7PJ7B7ka0bnUHXO+kJpJwodla+dX",
         "down_alert": true,
         "sender_name": "Site24x7",
         "problem_alert": false,

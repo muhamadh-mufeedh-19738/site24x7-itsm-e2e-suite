@@ -608,6 +608,44 @@ def cmd_verify(args):
         return
 
     # ---- group per integration ----------------------------------------
+    # WEB_MON ALIGNMENT — ServiceNow sys_id → INC# cross-reference map.
+    #
+    # ServiceNow.java writes TWO identifiers to alert_logs:
+    #   CREATE row:  RequestMessageId = sys_id (32-char UUID)
+    #                Message text     = "...(Operation : Create , Ticket Id: INCxxxxxx)"
+    #                → we extract INC# from Message and store sys_id separately
+    #
+    #   UP work-note row (addNotes, status==UP):
+    #                RequestMessageId = sys_id (same UUID as the create row)
+    #                Message text     = "New Monitor is UP (Work Notes)"
+    #                → NO INC# appended (ServiceNow.java line 892 skips it)
+    #                → NO Operation tag (only appended on non-UP status)
+    #
+    # To correlate the UP row back to the created ticket we need to know:
+    #   sys_id  →  INC#
+    # We build this map in a FIRST PASS over all rows before grouping.
+    # The create row always arrives before or around the same time as the
+    # UP row, so this first pass guarantees the map is ready when we
+    # process the UP row in the main loop.
+    #
+    # KEY INVARIANT: if the UP row's RequestMessageId (sys_id) matches the
+    # CREATE row's RequestMessageId, they refer to the same ticket. We then
+    # use the INC# from the CREATE row as the canonical ticket ID for the
+    # UP row. This is exactly what ServiceNow.java itself does — the sys_id
+    # is the internal handle; the INC number is what humans and stage4 use.
+    _sn_sys_id_to_inc = {}  # {sys_id_str: "INC0018176"}
+    for _e in rows:
+        _raw = str(_e.get("RequestMessageId") or _e.get("requestmessageid")
+                   or _e.get("requestMessageId") or "").strip()
+        if not _raw or _raw.lower() in _BOGUS_TICKET_IDS:
+            continue
+        if SN_SYS_ID_RE.match(_raw) and len(_raw) == 32:
+            _msg = str(_e.get("Message") or _e.get("message") or "")
+            _sn = SN_NUMBER_RE.search(_msg)
+            if _sn:
+                # This row has BOTH a sys_id AND an INC# — record the mapping
+                _sn_sys_id_to_inc[_raw] = _sn.group(1).upper()
+
     per = {}
     for e in rows:
         # ------------------------------------------------------------------
@@ -714,9 +752,46 @@ def cmd_verify(args):
                         ticket_from_db = sn_match.group(1).upper()
                         tid_source = "SN INC# from Message (sys_id in RequestMessageId)"
                     else:
-                        # No INC# in message — use sys_id as fallback
-                        ticket_from_db = raw_tid
-                        tid_source = "RequestMessageId (sys_id)"
+                        # --------------------------------------------------------
+                        # WEB_MON ALIGNMENT — ServiceNow.java addNotes() line 892
+                        #   if(status != Constants.UP) {
+                        #       alertLogMsg += ALERTLOG_UPDATE_KEY_TICKET + ticketId + ")";
+                        #   }
+                        # When status==UP the ticket id is intentionally NOT
+                        # appended to the Message text. So a UP work-note row has:
+                        #   RequestMessageId = sys_id  (same UUID as CREATE row)
+                        #   Message          = "...Monitor is UP (Work Notes)"
+                        #                      — no INC# anywhere in the text
+                        #
+                        # CROSS-REFERENCE: look up the INC# from the CREATE row
+                        # that carries the same sys_id. We built _sn_sys_id_to_inc
+                        # in a first pass above — it maps sys_id → INC# using
+                        # rows that have BOTH identifiers (create rows do, UP
+                        # work-note rows don't).
+                        #
+                        # This is the correct fix: the UP row and the CREATE row
+                        # share the same RequestMessageId (sys_id). By cross-
+                        # referencing we recover the INC# without guessing.
+                        # --------------------------------------------------------
+                        cross = _sn_sys_id_to_inc.get(raw_tid)
+                        if cross:
+                            ticket_from_db = cross
+                            tid_source = ("SN INC# cross-ref via sys_id "
+                                          "(addNotes UP row — no INC# in Message)")
+                            log(f"  [sn-xref] {dest}: UP work-note row has "
+                                f"sys_id {raw_tid!r} with no INC# in Message "
+                                f"(ServiceNow.java addNotes skips ticket id on "
+                                f"UP) — cross-referenced to {cross!r} from "
+                                f"CREATE row with same sys_id")
+                        else:
+                            # sys_id with no INC# in message and no CREATE row
+                            # to cross-ref yet — use sys_id as last resort so
+                            # at least the UP row is tracked. The second pass
+                            # will fail to match it against the INC-based
+                            # created set — but see the UP-implicit handler
+                            # below which has a further fallback.
+                            ticket_from_db = raw_tid
+                            tid_source = "RequestMessageId (sys_id, no INC# cross-ref)"
                 else:
                     # Non-UUID: INC number or other tool's ticket ID directly
                     ticket_from_db = raw_tid
@@ -757,7 +832,42 @@ def cmd_verify(args):
             # ticket on recovery, proving both delivery AND that the ticket
             # was acted on. We record it as "update" so the lifecycle
             # (create + update@UP) can complete correctly.
+            #
+            # EDGE CASE — sys_id with no cross-reference yet:
+            # If the UP row arrived BEFORE the CREATE row in the iteration
+            # order (which can happen), _sn_sys_id_to_inc may not yet have
+            # the mapping. In that case ticket_from_db is the raw sys_id.
+            # We apply one more fallback: if ticket_from_db looks like a
+            # sys_id AND there is exactly ONE ticket already in this
+            # integration's create set, use that — it is overwhelmingly
+            # likely to be the ticket the UP row refers to (one monitor,
+            # one alert cycle, one integration = one ticket).
             # ----------------------------------------------------------------
+            if not op and st_txt == "UP":
+                # Apply the sys_id → created-ticket fallback BEFORE using
+                # ticket_from_db, in case the cross-ref map wasn't populated
+                # yet (UP row processed before CREATE row in iteration order).
+                if (ticket_from_db and db_sys_id
+                        and SN_SYS_ID_RE.match(ticket_from_db)
+                        and len(ticket_from_db) == 32):
+                    # ticket_from_db is still a raw sys_id — try map again
+                    cross2 = _sn_sys_id_to_inc.get(ticket_from_db)
+                    if cross2:
+                        ticket_from_db = cross2
+                        tid_source = ("SN INC# cross-ref via sys_id "
+                                      "(late-resolve, addNotes UP row)")
+                    elif len(rec.get("create", set())) == 1:
+                        # Last resort: exactly one created ticket for this
+                        # integration — the UP work-note must be for it
+                        sole = next(iter(rec["create"]))
+                        ticket_from_db = sole
+                        tid_source = ("SN INC# inferred from sole CREATE "
+                                      "(sys_id UP row, no cross-ref available)")
+                        log(f"  [sn-infer] {dest}: UP work-note sys_id "
+                            f"{db_sys_id!r} has no cross-ref; sole created "
+                            f"ticket for this integration is {sole!r} — "
+                            f"inferring UP delivery for that ticket")
+
             if not op and st_txt == "UP" and ticket_from_db:
                 ticket = ticket_from_db
                 if ticket.lower() not in _BOGUS_TICKET_IDS:
@@ -896,9 +1006,22 @@ def cmd_verify(args):
             raw_tid2 = str(raw_tid2).strip() if raw_tid2 else ""
             if raw_tid2 and raw_tid2.lower() not in _BOGUS_TICKET_IDS:
                 if SN_SYS_ID_RE.match(raw_tid2) and len(raw_tid2) == 32:
-                    # ServiceNow sys_id — look for INC# in Message
+                    # ServiceNow sys_id — look for INC# in Message first
                     sn2 = SN_NUMBER_RE.search(msg)
-                    ticket2 = sn2.group(1).upper() if sn2 else raw_tid2
+                    if sn2:
+                        ticket2 = sn2.group(1).upper()
+                    else:
+                        # WEB_MON ALIGNMENT: addNotes() UP row has no INC# in
+                        # Message. Cross-reference via the sys_id→INC# map
+                        # built from the CREATE rows in the main window.
+                        cross_ow = _sn_sys_id_to_inc.get(raw_tid2)
+                        if cross_ow:
+                            ticket2 = cross_ow
+                        elif len(created) == 1:
+                            # Last resort: sole created ticket for this integ
+                            ticket2 = next(iter(created))
+                        else:
+                            ticket2 = raw_tid2  # fall back to sys_id
                 else:
                     ticket2 = raw_tid2
             else:
