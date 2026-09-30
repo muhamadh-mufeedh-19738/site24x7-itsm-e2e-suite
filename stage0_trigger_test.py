@@ -185,15 +185,9 @@ def session_headers():
 # API calls
 # ---------------------------------------------------------------------------
 
-def api_put(grid, path, token, body=None):
-    """PUT to the Site24x7 API. Returns (http_status, parsed_json_or_None)."""
-    url = grid.rstrip("/") + path
-    data = json.dumps(body or {}).encode() if body else b""
-    req = urllib.request.Request(url, data=data, method="PUT", headers={
-        "Authorization": f"Zoho-oauthtoken {token}",
-        "Accept":        "application/json; version=2.1",
-        "Content-Type":  "application/json",
-    })
+def _do_put(url, headers):
+    """Low-level PUT helper.  Returns (http_status, parsed_json)."""
+    req = urllib.request.Request(url, data=b"", method="PUT", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT,
                                     context=make_ctx()) as r:
@@ -204,6 +198,52 @@ def api_put(grid, path, token, body=None):
         return e.code, {"_error": body_txt}
     except Exception as exc:
         return None, {"_exception": str(exc)}
+
+
+def api_put(grid, path, token, body=None):
+    """PUT to the Site24x7 API. Returns (http_status, parsed_json_or_None)."""
+    url = grid.rstrip("/") + path
+    return _do_put(url, {
+        "Authorization": f"Zoho-oauthtoken {token}",
+        "Accept":        "application/json; version=2.1",
+        "Content-Type":  "application/json",
+    })
+
+
+def api_put_with_session(grid, path, token):
+    """PUT with session-cookie auth first (for endpoints that need 'admin'
+    OAuth scope like trigger_test), then fall back to OAuth token.
+
+    The trigger_test endpoint in security-admin-rest-api.xml requires
+    oauthscope='admin'.  The browser uses session cookies for this call
+    (the ▶ button).  Our OAuth token typically has monitor/integration
+    scopes but not admin — so we try the session cookie first.
+    """
+    url = grid.rstrip("/") + path
+
+    # Try 1: session cookie (same auth the browser ▶ button uses)
+    cookie = os.environ.get("S247_SESSION_COOKIE", "").strip()
+    csrf   = os.environ.get("S247_CSRF_TOKEN", "").strip()
+    if cookie:
+        sess_headers = {
+            "Cookie":        cookie,
+            "Accept":        "application/json, text/javascript, */*; q=0.01",
+            "Content-Type":  "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if csrf:
+            sess_headers["X-CSRF-Token"] = csrf
+        code, resp = _do_put(url, sess_headers)
+        # Only fall through to OAuth if the session auth itself failed
+        is_auth_fail = (code == 401
+                        or (isinstance(resp, dict)
+                            and "1121" in str(resp.get("_error", ""))))
+        if not is_auth_fail:
+            return code, resp
+        log("    [info] Session cookie auth failed — trying OAuth token ...")
+
+    # Try 2: OAuth token (needs admin scope in the refresh token)
+    return api_put(grid, path, token)
 
 
 def applog_search(grid, from_dt, to_dt, query, page="1-100"):
@@ -291,7 +331,7 @@ def fire_trigger_test(grid, token, integration, dry_run=False):
 
     path = f"/api/integration/thirdparty_service/trigger_test/{service_id}"
     log(f"  PUT {path}  ...")
-    http_code, resp = api_put(grid, path, token)
+    http_code, resp = api_put_with_session(grid, path, token)
 
     # Determine outcome using the same logic as the UI
     # (code==0 and data.response_code==200 → Success)
@@ -300,7 +340,14 @@ def fire_trigger_test(grid, token, integration, dry_run=False):
     if resp and "_exception" in resp:
         api_msg = f"Network error: {resp['_exception']}"
     elif resp and "_error" in resp:
-        api_msg = f"HTTP {http_code}: {resp['_error']}"
+        err_txt = resp["_error"]
+        if "1121" in err_txt or "oauthscope" in err_txt.lower():
+            api_msg = (f"OAuth scope error (1121) — token lacks 'admin' "
+                       f"scope AND no valid session cookie found. "
+                       f"Set S247_SESSION_COOKIE (recommended) or add "
+                       f"Site24x7.Admin.Read to your OAuth refresh token.")
+        else:
+            api_msg = f"HTTP {http_code}: {err_txt}"
     elif http_code == 200:
         outer_code = resp.get("code")
         data_block = resp.get("data") or {}
