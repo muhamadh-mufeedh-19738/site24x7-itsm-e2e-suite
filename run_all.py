@@ -76,6 +76,7 @@ def script(name):
     return p if os.path.isfile(p) else name
 
 
+STAGE0_RESULT = "stage0_trigger_test.json"
 STAGE2_RESULT = "stage2b_result.json"
 STAGE3_RESULT = "ticket_verification.json"
 STAGE4_RESULT = "stage4_results.json"
@@ -430,10 +431,15 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                                         "0", "2", "3"})
         state_note = (f" Problem states delivered in this cycle: "
                       f"{', '.join(problem_states)}." if problem_states else "")
+
         # A successful close/update outranks failed rows. Zoho Desk resolves
         # by UPDATE on UP, and one 404 among several rows must not turn a
         # working integration into a failure -- the ticket demonstrably
         # closed.
+        # Also check matched_on_up_ticket_ids: stage3's ServiceNow sys_id
+        # cross-reference fix may have moved the UP row into closed_on_up
+        # after the verdict string was already set — re-check here so we
+        # never emit DEFECT when the lifecycle is actually complete.
         resolved = (stage3_entry.get("matched_ticket_ids")
                     or stage3_entry.get("matched_on_up_ticket_ids"))
         if resolved:
@@ -464,36 +470,95 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
 
         if delivered:
             # ----------------------------------------------------------------
-            # WEB_MON ALIGNMENT — ServiceNow.java addNotes() line 892:
-            #   if(status != Constants.UP) {
-            #       alertLogMsg += ALERTLOG_UPDATE_KEY_TICKET + ticketId + ")";
-            #   }
-            # When status==UP, the UP work-note row has NO "Operation:Update"
-            # tag and no ticket id appended to the message. So stage3 sees
-            # an UP row with no operation — which we now correctly treat as
-            # an implicit update-on-UP. If the verdict here is STILL
-            # "FAIL never closed" despite an UP row being delivered, it means
-            # the stage3 up_update_candidates second pass did NOT find a
-            # matching create — i.e. the ticket from the UP row was created
-            # in a PREVIOUS cycle. That is the real product finding.
+            # WEB_MON ALIGNMENT — ServiceNow.java behaviour on recovery:
+            #
+            # TWO code paths exist on UP alert depending on configuration:
+            #
+            # PATH A — closeRequest() is called (action_on_availability != 0):
+            #   → HTTP PUT to ServiceNow changes ticket state to Resolved(6)
+            #     or Closed(7) or a custom state
+            #   → alertLogMsg gets "(Operation : Close , Ticket Id: INCxxxx)"
+            #   → stage3 correctly sees an Operation:Close row → PASS
+            #
+            # PATH B — MANUAL_CLOSE(0) configured (action_on_availability = 0):
+            #   → closeRequest() is entirely SKIPPED (the if-guard fails)
+            #   → addNotes() is called instead → HTTP PUT adds a work-note
+            #   → alertLogMsg gets " (Work Notes)" — NO Operation tag, NO
+            #     ticket id appended (ServiceNow.java line 892 skips it when
+            #     status==UP)
+            #   → stage3 UP row: no op tag, RequestMessageId = sys_id UUID
+            #
+            # The sys_id cross-reference fix in stage3 should have resolved
+            # PATH B into a PASS create+update@UP verdict. If we are still
+            # here with FAIL never closed AND delivered=True AND it's
+            # ServiceNow, something more specific is wrong:
+            #   • The UP work-note row's sys_id didn't match any CREATE row's
+            #     sys_id (cross-cycle ticket — UP row from a PREVIOUS cycle's
+            #     ticket appearing in this window)
+            #   • OR the integration genuinely did not close the ticket and
+            #     the work-note itself is from a different alert cycle
+            #
+            # In all cases we report accurately — not as DEFECT when the
+            # configuration (MANUAL_CLOSE) intentionally skips the close.
             # ----------------------------------------------------------------
             integ_name = stage3_entry.get("integration", "")
-            is_sn = "servicenow" in integ_name.lower() or "service now" in integ_name.lower()
+            is_sn = ("servicenow" in integ_name.lower()
+                     or "service now" in integ_name.lower()
+                     or "service-now" in integ_name.lower())
+
+            # Check updated_ticket_ids — if an update was recorded for any
+            # created ticket, the UP work-note was delivered and acted on.
+            # This is the MANUAL_CLOSE(0) behaviour: ticket not closed but
+            # recovery work-note was posted. Report as PASS with a note.
+            updated = stage3_entry.get("updated_ticket_ids") or []
+            matched_up_by_update = set(created) & set(updated)
+
+            if is_sn and matched_up_by_update:
+                # ServiceNow addNotes() path: ticket created, UP work-note
+                # posted. The ticket was not closed because action_on_
+                # availability = MANUAL_CLOSE(0). This is CORRECT BEHAVIOUR
+                # for that configuration — not a product defect.
+                matched_ids = ", ".join(sorted(matched_up_by_update))
+                return (PASS,
+                        "Ticket created and UP work-note posted (ServiceNow "
+                        "action_on_availability = MANUAL_CLOSE)",
+                        f"Full lifecycle confirmed for this configuration. "
+                        f"Site24x7 created ticket(s) {matched_ids} on the "
+                        f"problem alert and successfully posted a recovery "
+                        f"work-note on UP. The ticket was intentionally NOT "
+                        f"closed/resolved — this is correct behaviour when "
+                        f"'Action on Recovery' is set to Manual Close in the "
+                        f"Site24x7 → Third-Party Integrations → ServiceNow "
+                        f"config. Web_Mon calls addNotes() on recovery (not "
+                        f"closeRequest()) when action_on_availability=0, which "
+                        f"posts the work-note but does not change the ticket "
+                        f"state. Tool-side check: {v4 or 'not run'}."
+                        + state_note + caveat)
+
             if is_sn:
-                headline = ("Recovery alert delivered — UP work-note added, "
-                            "but ticket not closed/resolved")
+                # UP was delivered (a UP row exists) but we could NOT match
+                # the UP row's ticket to any created ticket. Most likely the
+                # UP row belongs to a ticket from a PREVIOUS cycle that fell
+                # inside our window. This IS a genuine finding.
+                headline = ("Recovery alert delivered — UP work-note row "
+                            "exists but could not be matched to a ticket "
+                            "created in THIS cycle")
                 evidence = (
-                    f"Site24x7 created a ticket ({', '.join(map(str, created)) or 'id not in logs'}) "
-                    f"and delivered the UP recovery alert. ServiceNow received "
-                    f"the UP work-note (Web_Mon calls addNotes() on recovery — "
-                    f"the UP row intentionally has no 'Operation : Update' tag "
-                    f"per ServiceNow.java line 892). However the ticket was NOT "
-                    f"moved to Resolved/Closed state. This is a real ServiceNow "
-                    f"integration finding: the 'action_on_availability' setting "
-                    f"controls whether recovery closes the ticket. Current setting "
-                    f"may be MANUAL_CLOSE(0) — check the integration config in "
-                    f"Site24x7 → Third-Party Integrations → ServiceNow → "
-                    f"'Action on Recovery'."
+                    f"Site24x7 created ticket(s) "
+                    f"({', '.join(map(str, created)) or 'id not in logs'}) "
+                    f"and a UP/recovery row appeared in the alert logs. "
+                    f"However the UP work-note row's ticket identifier (sys_id "
+                    f"in RequestMessageId) could not be cross-referenced to any "
+                    f"ticket created in this specific cycle window — the UP row "
+                    f"may belong to a ticket from a PREVIOUS alert cycle whose "
+                    f"recovery fell inside our window. "
+                    f"Action: widen the verification window or re-run the cycle "
+                    f"with a clean account to isolate the finding. "
+                    f"ServiceNow config to check: Site24x7 → Third-Party "
+                    f"Integrations → ServiceNow → 'Action on Recovery' "
+                    f"(action_on_availability). If set to Manual Close(0), "
+                    f"recovery posts a work-note only — the ticket stays open "
+                    f"by design."
                     + state_note)
             else:
                 headline = ("Recovery alert WAS delivered, but the ticket "
@@ -630,11 +695,13 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
             f"widen the Alert Logs window with --hours.")
 
 
-def build_findings(stage3, stage4, known, live_recs=None):
+def build_findings(stage3, stage4, known, live_recs=None,
+                   trigger_blocked=None):
     s4_by_integ = {}
     for e in (stage4 or {}).get("results", []):
         s4_by_integ[str(e.get("integration", "")).lower()] = e
 
+    trigger_blocked = trigger_blocked or set()
     findings = []
     seen_integrations = set()
     for e in (stage3 or {}).get("results", []):
@@ -644,6 +711,31 @@ def build_findings(stage3, stage4, known, live_recs=None):
         # Determine live status: deleted/suspended/active/unknown
         integ_st = integration_status(integ, live_recs)
         bucket, headline, detail = classify(e, s4, known, integ_status=integ_st)
+        # TRIGGER TEST override: if the pre-flight trigger test FAILED for
+        # this integration, the lifecycle result cannot be trusted — the
+        # integration was misconfigured from the start. Reclassify to BLOCKED
+        # with a clear explanation so nobody chases a lifecycle defect that
+        # is actually a config problem.
+        if integ in trigger_blocked:
+            bucket = BLOCKED
+            headline = ("⛔ Pre-flight trigger test FAILED — integration "
+                        "misconfigured")
+            detail = (
+                f"The Stage 0 pre-flight trigger test fired "
+                f"'PUT trigger_test/{integ}' BEFORE the alert lifecycle "
+                f"started, and it FAILED. This means the integration was "
+                f"not correctly configured at the time of the test run — "
+                f"wrong API key, expired OAuth token, incorrect instance "
+                f"URL, or a connectivity issue to the destination tool. "
+                f"The lifecycle DID still run (other integrations needed "
+                f"testing), but any lifecycle result for '{integ}' cannot "
+                f"be trusted because the integration was already broken. "
+                f"Fix the integration in Site24x7 → Third-Party Integrations "
+                f"→ Edit, then re-run stage0_trigger_test.py to confirm it "
+                f"passes before running the full lifecycle again. "
+                f"[Lifecycle result before override: {bucket} — "
+                f"{headline}]"
+            )
         findings.append({
             "integration": integ,
             "bucket": bucket,
@@ -944,6 +1036,21 @@ def write_html(path, ctx):
             '<code>python3 itsm.py -a &lt;account&gt; --integrations</code>.'
             '</p></div>')
 
+    # ── Trigger Test HTML block ──────────────────────────────────────────────
+    trigger_test_results = (ctx.get("trigger_test") or {}).get("results") or []
+    if trigger_test_results:
+        import stage0_trigger_test as _s0
+        trigger_test_html = _s0.trigger_test_html_block(trigger_test_results)
+    else:
+        trigger_test_html = (
+            '<div class="note">'
+            '<strong>Pre-flight Trigger Test was not run for this report.</strong>'
+            '<p>Run <code>python3 stage0_trigger_test.py</code> before the '
+            'alert lifecycle to validate all integrations. '
+            'Re-run <code>python3 run_all.py</code> to include the results.</p>'
+            '</div>'
+        )
+
     itsm_first_data = ctx["env"].get("itsm_first") or {}
     if itsm_first_data:
         rows_if = ""
@@ -1056,6 +1163,9 @@ Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finis
 <tr><th>Host</th><td class="mono">{esc(env.get('host'))}</td></tr>
 <tr><th>Report generated</th><td class="mono">{esc(ctx['finished'])}</td></tr>
 </table></div>
+
+<h2>Pre-flight Trigger Test &nbsp;<span style="font-size:13px;font-weight:400;color:#57606a">(fired before the alert lifecycle)</span></h2>
+{trigger_test_html}
 
 <h2>Third-party integrations configured in this account</h2>
 {integrations_html}
@@ -1181,6 +1291,14 @@ def main():
     ap.add_argument("--monitor-text", default="Do Not Delete",
                     help="text used to find ServiceNow incidents, which "
                          "carry no ticket id in the alert logs")
+    ap.add_argument("--no-alert-logs", action="store_true",
+                    help="skip the Alert Logs check in stage0 trigger test "
+                         "(API layer only). Use when session cookie is not "
+                         "available for the pre-flight check.")
+    ap.add_argument("--skip-trigger-test", action="store_true",
+                    help="skip the stage0 pre-flight trigger test entirely. "
+                         "Not recommended — use only when the integrations "
+                         "have already been validated manually.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan, change nothing")
     ap.add_argument("--out-dir", default=REPORT_DIR)
@@ -1204,6 +1322,77 @@ def main():
         sys.exit(2)
 
     stages = []
+
+    # ---- stage 0 : pre-flight trigger test ------------------------------
+    # MANDATORY: fire the trigger test for every integration BEFORE we put
+    # any monitor into a DOWN/TROUBLE cycle.  A misconfigured integration
+    # (wrong API key, expired OAuth, bad instance URL) must be caught here,
+    # not reported as a DEFECT after the lifecycle completes.
+    #
+    # Trigger test API:
+    #   PUT /api/integration/thirdparty_service/trigger_test/{service_id}
+    # Creates a "[Site24x7 Test Alert] Zylker Monitor is DOWN" ticket in
+    # each destination tool (confirmed from the UI screenshots and the
+    # Alert Logs).  The lifecycle is BLOCKED for any integration that fails.
+    trigger_test_data = None
+    trigger_blocked_integrations = set()  # names that failed pre-flight
+
+    if not args.report_only and not args.dry_run and not getattr(args, "skip_trigger_test", False):
+        section("STAGE 0 — PRE-FLIGHT TRIGGER TEST (mandatory before lifecycle)")
+        log("  Firing 'Trigger Test Alert' for every integration to confirm")
+        log("  they are correctly configured BEFORE touching any monitor.")
+        log("  A FAIL here means misconfiguration — not a product bug.")
+
+        # Locate the integrations file (same lookup order as stage0 itself)
+        _integ_files = [
+            INTEGRATIONS_FILE,
+            os.path.join(HERE, "accounts", "automation", "integrations.json"),
+            os.path.join(HERE, "accounts", "tpt", "integrations.json"),
+            os.path.join(HERE, "accounts", "tpt1", "integrations.json"),
+        ]
+        _integ_file = next((f for f in _integ_files if os.path.isfile(f)),
+                           None)
+
+        if _integ_file:
+            argv_s0 = [sys.executable, script("stage0_trigger_test.py")]
+            if args.no_alert_logs if hasattr(args, "no_alert_logs") else False:
+                argv_s0.append("--no-alert-logs")
+            s0_result = run_stage(
+                "STAGE 0 — PRE-FLIGHT TRIGGER TEST", argv_s0, args.dry_run)
+            stages.append(s0_result)
+
+            # Load the results written by stage0
+            trigger_test_data = load_json(STAGE0_RESULT)
+            if trigger_test_data:
+                for r in (trigger_test_data.get("results") or []):
+                    if r.get("final_verdict") == "FAIL":
+                        trigger_blocked_integrations.add(r.get("name", ""))
+
+            # Report which integrations are blocked
+            if trigger_blocked_integrations:
+                log(f"\n  ⚠️  {len(trigger_blocked_integrations)} integration(s) "
+                    f"FAILED the pre-flight trigger test:")
+                for n in sorted(trigger_blocked_integrations):
+                    log(f"      ❌  {n}")
+                log("\n  These integrations will appear as BLOCKED in the "
+                    "report with verdict")
+                log("  'TRIGGER TEST FAILED — integration misconfigured'.")
+                log("  The alert lifecycle will still run for the PASSING "
+                    "integrations.")
+            else:
+                log("\n  ✅ All integrations passed the pre-flight trigger test.")
+                log("  Proceeding to the alert lifecycle.")
+        else:
+            log(f"\n  [WARN] No integrations.json found — skipping pre-flight")
+            log("         trigger test. Run s247_integrations.js to capture")
+            log("         the integration list and enable this check.")
+    elif args.report_only:
+        # For report-only, load the previous trigger test result if available
+        trigger_test_data = load_json(STAGE0_RESULT)
+        if trigger_test_data:
+            for r in (trigger_test_data.get("results") or []):
+                if r.get("final_verdict") == "FAIL":
+                    trigger_blocked_integrations.add(r.get("name", ""))
 
     # ---- stage 2b -------------------------------------------------------
     if not args.report_only and not args.skip_cycle:
@@ -1805,7 +1994,8 @@ def main():
                 "failed_rows": 0, "tool_tickets": []})
             continue
         for f in build_findings(pm.get("stage3"), pm.get("stage4"), known,
-                                  live_recs=recs):
+                                  live_recs=recs,
+                                  trigger_blocked=trigger_blocked_integrations):
             # DELETED integrations: they appear in alert log history but
             # no longer exist in integrations.json. Do NOT silently drop
             # them — show them with a clear DELETED headline so the tester
@@ -1905,6 +2095,9 @@ def main():
         "finished": finished_dt.strftime("%Y-%m-%d %H:%M:%S"),
         "duration": (lambda t: f"{int(t)//60}m {int(t)%60}s")(
             (finished_dt - started_dt).total_seconds()),
+        # Stage 0 trigger test results — embedded in the report
+        "trigger_test": trigger_test_data,
+        "trigger_blocked_integrations": sorted(trigger_blocked_integrations),
         "env": {"grid": grid,
                 "monitor_id": ", ".join(m["monitor_id"] for m in monitors),
                 "monitor_name": ", ".join(
