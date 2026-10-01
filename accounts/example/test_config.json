@@ -1,0 +1,10 @@
+{
+  "_comment": "Starter inventory. Rebuild for YOUR account with:  python3 stage1_inventory.py   (or:  python3 itsm.py --account example --inventory). Set grid_url to YOUR grid.",
+  "grid_url": "https://CHANGE-ME.localsite24x7.com",
+  "integration_endpoint": null,
+  "monitors": [],
+  "integrations": [],
+  "primary_test_monitor": null,
+  "poll_wait_seconds": 60,
+  "max_wait_seconds": 600
+}

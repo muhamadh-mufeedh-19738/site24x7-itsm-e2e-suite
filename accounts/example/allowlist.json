@@ -1,0 +1,5 @@
+{
+  "_comment": "ONLY these monitors may EVER be modified by the automation. Fill in YOUR monitor ids (and/or name patterns with * wildcards). Generate automatically with:  python3 preflight.py --write-allowlist 'YOUR-PATTERN*'",
+  "monitor_names": [],
+  "monitor_ids": []
+}

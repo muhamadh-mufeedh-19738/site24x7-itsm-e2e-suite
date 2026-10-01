@@ -1,0 +1,4 @@
+{
+  "_comment": "Triaged, already-known product bugs. An integration listed here is reported as a KNOWN ISSUE instead of a fresh DEFECT, so real regressions stand out. Leave empty to start.",
+  "issues": []
+}
