@@ -94,6 +94,11 @@ echo "   e) One-time browser login (session cookie for Alert Logs):"
 echo "        node s247_login.js --setup"
 echo "        source .session.env"
 echo
+echo "   f) Create the website test monitors in YOUR account (run once):"
+echo "        source env.sh"
+echo "        python3 bootstrap_monitors.py --dry-run   # look first"
+echo "        python3 bootstrap_monitors.py             # create them"
+echo
 echo "   Then run the suite:"
 echo "        source env.sh && source .session.env && source .itsm.env"
 echo "        python3 run_all.py"

@@ -109,6 +109,28 @@ source .session.env          # load the cookie it wrote
 
 After that, every run refreshes the cookie silently.
 
+### Step 6 — Create the test monitors in **your** account ⭐ (important)
+
+The lifecycle test drives real **website monitors** DOWN → UP. Your account
+almost certainly does **not** have the specific test monitors this suite
+expects — so create them once, automatically:
+
+```bash
+source env.sh
+python3 bootstrap_monitors.py --dry-run   # look first — changes nothing
+python3 bootstrap_monitors.py             # creates 2 website test monitors
+```
+
+This creates two public-URL monitors (`Site24x7 E2E Test Monitor 1` and `2`),
+already in the UP state the suite expects, and **wires them into your
+account's allowlist automatically** so the safety gate permits them. The
+per-account profile IDs (notification / threshold / location / user group)
+are **discovered from your account** — nothing is hard-coded.
+
+> Re-running is safe (it reuses monitors it already made, never duplicates).
+> To remove them later: `python3 bootstrap_monitors.py --teardown` — this
+> deletes **only** the monitors this script created, never anything else.
+
 You're ready. Jump to [Running the suite](#running-the-suite).
 
 ---
@@ -183,6 +205,8 @@ python3 stage0_trigger_test.py
 
 | Command | Does |
 |---|---|
+| `python3 bootstrap_monitors.py` | create the website test monitors (run once per account) |
+| `python3 bootstrap_monitors.py --teardown` | delete only the test monitors this script created |
 | `python3 run_all.py` | full run, all stages |
 | `python3 run_all.py --skip-cycle` | reuse the last DOWN/UP cycle, just re-verify |
 | `python3 stage0_trigger_test.py` | Stage 0 trigger test only |
@@ -245,6 +269,10 @@ exact command to fix each one.
 ## How it works (architecture)
 
 ```
+bootstrap_monitors.py (one-time)     → creates the website test monitors the
+                                       lifecycle needs, in YOUR account, and
+                                       wires them into the allowlist
+
 run_all.py  (orchestrator)
    │
    ├─ Stage 0  stage0_trigger_test.py   → validates each integration (trigger test)
