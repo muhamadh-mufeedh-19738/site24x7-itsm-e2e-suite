@@ -133,7 +133,7 @@ function toMillis(v) {
 
   const context = await chromium.launchPersistentContext(PROFILE, {
     headless: !HEADED,
-    channel: 'chrome',
+    channel: process.env.S247_BROWSER_CHANNEL || 'chrome',
     ignoreHTTPSErrors: true,
     args: ['--no-first-run', '--no-default-browser-check'],
   });

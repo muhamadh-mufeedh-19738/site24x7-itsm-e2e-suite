@@ -10,7 +10,6 @@ account.env
 env.sh
 env.big.sh
 extract_cookie.py
-get_token.sh
 get_refresh_token.sh
 
 # ─── Runtime / Generated data ─────────────────────────────────────────────────

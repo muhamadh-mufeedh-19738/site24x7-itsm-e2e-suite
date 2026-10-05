@@ -72,7 +72,7 @@ function die(msg, extra) {
   try {
     context = await chromium.launchPersistentContext(PROFILE, {
       headless: !HEADED,
-      channel: 'chrome',            // real Chrome -> real certificate store
+      channel: process.env.S247_BROWSER_CHANNEL || 'chrome',            // real Chrome -> real certificate store
       ignoreHTTPSErrors: true,
       args: ['--no-first-run', '--no-default-browser-check'],
     });
