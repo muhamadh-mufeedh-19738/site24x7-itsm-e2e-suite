@@ -195,10 +195,43 @@ function die(msg, extra) {
     if (next2) await page.click(next2);
 
     console.log('  submitted, waiting for the session...');
+
+    /**
+     * After the password, Zoho sometimes shows an extra page before the app
+     * opens -- e.g. "Secure your account using MFA" (set up OneAuth) with a
+     * "Skip" link, or a "Remind me later" / "Not now" prompt. A person just
+     * clicks Skip; this does the same. Only skip/later-type links are ever
+     * clicked -- it never enrols MFA or changes account settings.
+     */
+    async function skipInterstitials() {
+      const body = await page.locator('body').innerText().catch(() => '');
+      if (!/secure your account|multi-factor|mfa|remind me|not now|skip/i.test(body)) return false;
+      const labels = [/^\s*skip\b/i, /remind me/i, /skip for now/i, /not now/i,
+                      /i'?ll do it later/i, /^\s*later\s*$/i];
+      let clicked = false;
+      for (const re of labels) {
+        const el = page.getByText(re).first();
+        if (await el.isVisible().catch(() => false)) {
+          await el.click().catch(() => {});
+          console.log('  extra sign-in page (MFA / reminder) -- clicked "' + ((await el.textContent().catch(() => '')) || '').trim() + '", like a person would');
+          clicked = true;
+          await page.waitForTimeout(2000);
+        }
+      }
+      return clicked;
+    }
+
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {
       const r = await sessionWorks();
       if (r.ok) return { ok: true, why: r.why };
+      if (await skipInterstitials()) {
+        // the app may land on a different page after skipping -- reopen the grid
+        await page.goto(grid + '/app/client#/home/operations/alert-logs',
+                        { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.waitForTimeout(4000);
+        continue;
+      }
       const err = await page.locator('.errorMsg, #errorMsg, .error')
         .first().textContent().catch(() => null);
       if (err && err.trim()) {
