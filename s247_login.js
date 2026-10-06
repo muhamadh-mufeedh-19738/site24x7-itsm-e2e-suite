@@ -106,12 +106,26 @@ function die(msg, extra) {
    * Instead, call the same Alert Logs endpoint stage 3 uses and insist on
    * a 200. Nothing else counts as logged in.
    */
-  async function sessionWorks() {
-    const cs = await context.cookies();
-    const cname = cs.find(c => c.name === 's247cname');
-    if (!cname) return { ok: false, why: 'no s247cname cookie yet' };
+  // Cookies that the browser actually sends to the grid host. A fresh
+  // server profile can hold the same cookie name twice (e.g. one from
+  // before login on a parent domain); the most specific domain wins.
+  const GRID_HOST = new URL(grid).hostname;
+  function forGrid(cs) {
+    return cs
+      .filter(c => {
+        const d = (c.domain || '').replace(/^\./, '');
+        return d && (GRID_HOST === d || GRID_HOST.endsWith('.' + d));
+      })
+      .sort((x, y) => (y.domain || '').length - (x.domain || '').length);
+  }
+  let WORKING_CNAME = null;
 
-    const to = new Date();
+  async function sessionWorks() {
+    const cs = forGrid(await context.cookies());
+    const values = [...new Set(cs.filter(c => c.name === 's247cname').map(c => c.value))];
+    if (!values.length) return { ok: false, why: 'no s247cname cookie yet' };
+
+    const to = new Date(Date.now() - 60 * 1000);
     const from = new Date(to.getTime() - 3600 * 1000);
     const enc = t => encodeURIComponent(t).replace(/%3A/g, ':');
     const q = 'logtype=%22Alert%20Logs%22%20and%20MonitorType=%22Website%22';
@@ -119,23 +133,32 @@ function die(msg, extra) {
               + `${enc(stamp(to))}/1-100/desc?time_filter=&query=${q}`
               + `&page_type=full_page`;
 
-    try {
-      const res = await page.evaluate(async ({ u, tok }) => {
-        try {
-          const r = await fetch(u, {
-            credentials: 'include',
-            headers: { 'x-zcsrf-token': 's247pname=' + tok },
-          });
-          const t = await r.text();
-          return { status: r.status, head: t.slice(0, 120) };
-        } catch (e) { return { status: 0, head: String(e) }; }
-      }, { u: url, tok: cname.value });
-
-      if (res.status === 200) return { ok: true, why: 'Alert Logs returned 200' };
-      return { ok: false, why: `Alert Logs returned ${res.status}` };
-    } catch (e) {
-      return { ok: false, why: 'probe failed: ' + (e.message || e) };
+    let last = null;
+    for (const tok of values) {      // try each CSRF candidate until one works
+      try {
+        const res = await page.evaluate(async ({ u, tok }) => {
+          try {
+            const r = await fetch(u, {
+              credentials: 'include',
+              headers: { 'x-zcsrf-token': 's247pname=' + tok },
+            });
+            const t = await r.text();
+            return { status: r.status, head: t.slice(0, 160) };
+          } catch (e) { return { status: 0, head: String(e) }; }
+        }, { u: url, tok });
+        if (res.status === 200) {
+          WORKING_CNAME = tok;
+          return { ok: true, why: 'Alert Logs returned 200' };
+        }
+        last = res;
+      } catch (e) {
+        last = { status: 0, head: 'probe failed: ' + (e.message || e) };
+      }
     }
+    const head = String(last.head || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { ok: false,
+             why: `Alert Logs returned ${last.status}` + (head ? ` (server said: ${head})` : '')
+                  + (values.length > 1 ? ` [tried ${values.length} CSRF cookies]` : '') };
   }
 
   async function haveCookie() { return (await sessionWorks()).ok; }
@@ -311,8 +334,17 @@ function die(msg, extra) {
           + 'Screenshot: ' + SHOT);
     }
 
-    const cookies = (await context.cookies())
-      .filter(c => (c.domain || '').includes('site24x7'));
+    // One value per cookie name (most specific domain first), and the CSRF
+    // cookie that was PROVEN to work against Alert Logs.
+    const seen = new Set();
+    const cookies = forGrid(await context.cookies()).filter(c => {
+      if (seen.has(c.name)) return false;
+      seen.add(c.name);
+      return true;
+    });
+    if (WORKING_CNAME) {
+      for (const c of cookies) if (c.name === 's247cname') c.value = WORKING_CNAME;
+    }
     const header = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     const cname = cookies.find(c => c.name === 's247cname');
     if (!cname) die('s247cname cookie missing, cannot build the CSRF token.');
