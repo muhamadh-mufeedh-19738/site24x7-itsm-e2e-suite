@@ -1,0 +1,9 @@
+{
+  "_comment": "Grids the suite can test. Add a grid here and it shows up in the 'WHICH GRID?' question automatically. 'ip' is for reference only.",
+  "grids": {
+    "integrations-qa":  { "url": "https://integrations-qa.localsite24x7.com" },
+    "eum-dev":          { "url": "https://eum-dev.localsite24x7.com",          "ip": "10.62.107.166" },
+    "s247integrations": { "url": "https://s247integrations.localsite24x7.com", "ip": "10.62.107.246" },
+    "pmclient":         { "url": "https://pmclient.localsite24x7.com",         "ip": "10.65.150.223" }
+  }
+}

@@ -34,12 +34,21 @@ LAYOUT IT CREATES
     different reports.
 
 USAGE
-    python3 itsm.py                     ask which account, then run
-    python3 itsm.py --account big       skip the question
+    python3 itsm.py                     ask which GRID, then which account, then run
+    python3 itsm.py --grid eum-dev      skip the grid question
+    python3 itsm.py --account big       skip the account question
+                                        (its grid must match the chosen grid)
     python3 itsm.py --list              show configured accounts
     python3 itsm.py --check             preflight only, no run
     python3 itsm.py --login-only        just refresh the cookie
-    python3 itsm.py --init big          create a new account folder
+    python3 itsm.py --init big --grid eum-dev
+                                        create a new account folder on a grid
+
+GRIDS
+    The grids you can test live in grids.json (next to this file). Add a
+    grid there and it appears in the question automatically -- nothing in
+    the code needs to change. An account belongs to the grid its
+    account.env S247_GRID_URL points at.
 
     Anything else is passed straight through to run_all.py:
     python3 itsm.py --account big --skip-cycle --hours 8
@@ -55,6 +64,7 @@ import os
 import shutil
 import subprocess
 import sys
+from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ACCOUNTS = os.path.join(HERE, "accounts")
@@ -72,7 +82,7 @@ TEMPLATE = """# Account settings for '{name}'.
 # Single quotes around anything containing $ ! # or a backtick.
 
 # The Site24x7 grid this account lives on
-export S247_GRID_URL="https://integrations-qa.localsite24x7.com"
+export S247_GRID_URL="{grid_url}"
 
 # The script that mints an OAuth token, and the secrets file it reads
 export S247_TOKEN_SCRIPT="$HOME/Documents/qg/get_token.sh"
@@ -134,14 +144,14 @@ def read_env_file(path):
     return env
 
 
-def cmd_init(name):
+def cmd_init(name, grid_url):
     d = os.path.join(ACCOUNTS, name)
     if os.path.isdir(d):
         die(f"accounts/{name} already exists. Nothing was changed.")
     os.makedirs(os.path.join(d, "reports"), exist_ok=True)
 
     with open(os.path.join(d, "account.env"), "w", encoding="utf-8") as fh:
-        fh.write(TEMPLATE.format(name=name))
+        fh.write(TEMPLATE.format(name=name, grid_url=grid_url))
     os.chmod(os.path.join(d, "account.env"), 0o600)
 
     # Offer to seed the account with whatever is in the project root today,
@@ -170,14 +180,84 @@ def cmd_init(name):
     log("      - set S247_LOGIN_USER / S247_LOGIN_PASS")
     log(f"    nano {os.path.join(d, '.itsm.env')}")
     log("      - this account's ServiceNow / Desk / SDP / HALO credentials")
-    log(f"\n  Then:  python3 itsm.py --account {name} --check")
+    log(f"\n  Then:  python3 itsm.py --grid <grid> --account {name} --check")
+
+
+GRIDS_FILE = os.path.join(HERE, "grids.json")
+
+
+def host_of(url):
+    """'https://eum-dev.localsite24x7.com/app' -> 'eum-dev.localsite24x7.com'"""
+    u = (url or "").strip()
+    if "://" not in u:
+        u = "https://" + u
+    return (urlparse(u).hostname or "").lower()
+
+
+def load_grids():
+    """Read grids.json. Fails LOUDLY if it is missing or broken -- a run
+    must never guess which grid it is pointed at."""
+    if not os.path.isfile(GRIDS_FILE):
+        die(f"{GRIDS_FILE} not found. It lists the grids you can test.")
+    try:
+        data = json.load(open(GRIDS_FILE, encoding="utf-8"))
+    except ValueError as exc:
+        die(f"grids.json is not valid JSON: {exc}")
+    grids = data.get("grids") or {}
+    if not grids:
+        die("grids.json has no grids in it.")
+    for name, g in grids.items():
+        if not g.get("url"):
+            die(f"grids.json: grid {name!r} has no \"url\".")
+    return grids
+
+
+def account_grids(name):
+    """Which grids an account may run on. By default an account works on
+    EVERY grid in grids.json (the same login and monitors exist on all of
+    them). To restrict one, add to its account.env:
+        export S247_GRIDS="integrations-qa,eum-dev"
+    """
+    cfg = read_env_file(os.path.join(ACCOUNTS, name, "account.env"))
+    raw = cfg.get("S247_GRIDS", "").strip()
+    return [g.strip() for g in raw.split(",") if g.strip()] if raw else None
+
+
+def accounts_on_grid(accounts, gname):
+    out = []
+    for a in accounts:
+        allowed = account_grids(a)
+        if allowed is None or gname in allowed:
+            out.append(a)
+    return out
+
+
+def choose_grid(grids, accounts):
+    section("WHICH GRID?")
+    names = list(grids)
+    for i, n in enumerate(names, 1):
+        cnt = len(accounts_on_grid(accounts, n))
+        note = f"{cnt} account(s)" if cnt else "no account yet"
+        log(f"  {i}. {n:<18} {grids[n]['url']:<45} {note}")
+    log("")
+    while True:
+        try:
+            pick = input("  Enter a number (or the name): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            die("no grid chosen. When nobody can answer (Jenkins, cron), "
+                "pass it:  --grid <name>")
+        if pick in grids:
+            return pick
+        if pick.isdigit() and 1 <= int(pick) <= len(names):
+            return names[int(pick) - 1]
+        log("  Not one of the options. Try again.")
 
 
 def choose_account(accounts):
     section("WHICH ACCOUNT?")
     for i, a in enumerate(accounts, 1):
         cfg = read_env_file(os.path.join(ACCOUNTS, a, "account.env"))
-        log(f"  {i}. {a:<12} {cfg.get('S247_GRID_URL', '(no grid set)')}")
+        log(f"  {i}. {a:<12} {cfg.get('S247_LOGIN_USER', '')}")
     log("")
     while True:
         try:
@@ -191,23 +271,28 @@ def choose_account(accounts):
         log("  Not one of the options. Try again.")
 
 
-def build_env(name):
+def build_env(name, gname, grid):
     d = os.path.join(ACCOUNTS, name)
     cfg = read_env_file(os.path.join(d, "account.env"))
-    if not cfg.get("S247_GRID_URL"):
-        die(f"accounts/{name}/account.env has no S247_GRID_URL.")
 
     env = dict(os.environ)
     env.update(cfg)
     env.update(read_env_file(os.path.join(d, ".itsm.env")))
 
+    # The CHOSEN grid always wins over any URL written in the account files,
+    # so one account can be tested on any grid without editing anything.
+    env["S247_GRID_URL"] = grid["url"].rstrip("/")
+    env["S247_GRID_NAME"] = gname
+
     # Everything account-scoped, so two accounts can never overwrite
-    # each other's cookie, Chrome profile or reports.
+    # each other's cookie, Chrome profile or reports. The cookie is also
+    # per GRID, because a cookie for one grid does not work on another.
     env["S247_ACCOUNT"] = name
-    env["S247_SESSION_FILE"] = os.path.join(d, ".session.env")
+    env["S247_SESSION_FILE"] = os.path.join(d, f".session.{gname}.env")
     env["S247_PROFILE_DIR"] = os.path.join(
         os.path.expanduser("~"), f".s247-profile-{name}")
-    env.update(read_env_file(os.path.join(d, ".session.env")))
+    env.update(read_env_file(env["S247_SESSION_FILE"]))
+    env["S247_GRID_URL"] = grid["url"].rstrip("/")
     return d, env
 
 
@@ -227,6 +312,9 @@ def main():
         description="Run the ITSM suite against a chosen account",
         epilog="Unrecognised options are passed through to run_all.py")
     ap.add_argument("--account", "-a", default=None)
+    ap.add_argument("--grid", "-g", default=None,
+                    help="which grid to test (a name from grids.json). "
+                         "Asked interactively when not given.")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--init", metavar="NAME", default=None)
     ap.add_argument("--check", action="store_true",
@@ -258,7 +346,11 @@ def main():
     args, passthrough = ap.parse_known_args()
 
     if args.init:
-        cmd_init(args.init)
+        grids = load_grids()
+        gname = args.grid or choose_grid(grids, list_accounts())
+        if gname not in grids:
+            die(f"no such grid {gname!r}. Known: {', '.join(grids)}")
+        cmd_init(args.init, grids[gname]["url"])
         return
 
     accounts = list_accounts()
@@ -272,21 +364,46 @@ def main():
             cfg = read_env_file(os.path.join(ACCOUNTS, a, "account.env"))
             d = os.path.join(ACCOUNTS, a)
             log(f"\n  {a}")
-            log(f"     grid      : {cfg.get('S247_GRID_URL', '(not set)')}")
+            ag = account_grids(a)
+            log(f"     grids     : {', '.join(ag) if ag else 'all grids in grids.json'}")
             log(f"     token file: {cfg.get('TOKEN_ENV_FILE', '(not set)')}")
-            for f in (".itsm.env", "allowlist.json", ".session.env"):
+            for f in (".itsm.env", "allowlist.json"):
                 mark = "yes" if os.path.isfile(os.path.join(d, f)) else "NO"
                 log(f"     {f:<14}: {mark}")
         return
 
-    name = args.account or (accounts[0] if len(accounts) == 1
-                            else choose_account(accounts))
-    if name not in accounts:
-        die(f"no such account {name!r}. Known: {', '.join(accounts)}")
+    # ---- 1) GRID: always decided first, asked when not given -------------
+    grids = load_grids()
+    gname = args.grid or choose_grid(grids, accounts)
+    if gname not in grids:
+        die(f"no such grid {gname!r}. Known: {', '.join(grids)}")
+    grid = grids[gname]
+    on_grid = accounts_on_grid(accounts, gname)
 
-    d, env = build_env(name)
+    # ---- 2) ACCOUNT: only accounts that live on that grid -----------------
+    if args.account:
+        name = args.account
+        if name not in accounts:
+            die(f"no such account {name!r}. Known: {', '.join(accounts)}")
+        if name not in on_grid:
+            die(f"account {name!r} is limited to grid(s) "
+                f"{', '.join(account_grids(name))} (S247_GRIDS in its account.env), "
+                f"NOT {gname}. Nothing was run. Accounts allowed on {gname}: "
+                f"{', '.join(on_grid) or 'none'}")
+    else:
+        if not on_grid:
+            die(f"no account is allowed on grid {gname}. Check S247_GRIDS in the "
+                f"account.env files, or create one: "
+                f"python3 itsm.py --init <name> --grid {gname}")
+        if len(on_grid) == 1:
+            name = on_grid[0]
+            log(f"\n  Only one account on {gname}: using '{name}'.")
+        else:
+            name = choose_account(on_grid)
 
-    section(f"ACCOUNT: {name}")
+    d, env = build_env(name, gname, grid)
+
+    section(f"GRID: {gname}   ACCOUNT: {name}")
     log(f"  grid     : {env.get('S247_GRID_URL')}")
     log(f"  data dir : {d}")
     log(f"  profile  : {env.get('S247_PROFILE_DIR')}")
