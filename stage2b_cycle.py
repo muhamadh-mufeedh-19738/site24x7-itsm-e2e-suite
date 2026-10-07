@@ -753,7 +753,12 @@ def main():
 
     result["monitors"] = [
         {"monitor_id": m["monitor_id"], "name": m["name"], "url": m["url"],
-         "keyword": m["keyword"], "route": m["route"]} for m in selected]
+         "keyword": m["keyword"], "route": m["route"],
+         # Carry the monitor TYPE (URL, SERVER, SSL_CERT, REALBROWSER, ...)
+         # through to the report so each monitor row shows what KIND of check
+         # it was. Future monitor types (and new website-monitoring variants)
+         # appear automatically — no code change needed here.
+         "type": m.get("type") or ""} for m in selected]
     # keep the old single-monitor keys so existing readers still work
     result["monitor"] = {k: v for k, v in selected[0].items()
                          if k not in ("original",)}

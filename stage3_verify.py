@@ -868,6 +868,57 @@ def cmd_verify(args):
                             f"ticket for this integration is {sole!r} — "
                             f"inferring UP delivery for that ticket")
 
+                # ------------------------------------------------------------
+                # WEB_MON ALIGNMENT — ServiceNow "Work notes added" UP row
+                # with NO identifier at all (verified LIVE on the QA grid).
+                #
+                # The live alert-log row reads exactly:
+                #     "New Monitor 2 is UP (Work notes added)"
+                #   Status = 1 (UP), To = ServiceNow Automation
+                #   Message has NO INC#  AND  RequestMessageId is EMPTY.
+                #
+                # This is ServiceNow.java addNotes() running under
+                # action_on_availability = MANUAL_CLOSE(0):
+                #   • addNotes() posts a work-note on recovery (not a Close)
+                #   • line ~891 appends only "(Work notes added)" to the log
+                #   • line ~892 appends the Ticket Id ONLY when status != UP,
+                #     so on a UP row NO INC# is written to the Message
+                #   • RequestMessageId is not re-written for the work-note row
+                #
+                # Result: ticket_from_db stays None and the implicit
+                # update-on-UP below is skipped — so a perfectly healthy
+                # MANUAL_CLOSE ServiceNow integration was mis-reported as
+                # "FAIL never closed". The USER confirmed this from the UI:
+                # the UP alert IS sent; it only shows inside the ticket
+                # details, unlike the other ITSMs that tag it in the log.
+                #
+                # FIX: when a ServiceNow UP work-note row carries no ticket
+                # identifier at all AND exactly ONE ticket was created for
+                # this integration in this cycle, attribute the work-note to
+                # that sole created ticket. One monitor + one alert cycle +
+                # one integration = one ticket, so this is deterministic, not
+                # a guess. If there are zero or multiple created tickets we do
+                # NOT infer (ambiguous) and leave it for honest reporting.
+                # ------------------------------------------------------------
+                if not ticket_from_db:
+                    is_sn_dest = ("servicenow" in str(dest).lower()
+                                  or "service now" in str(dest).lower()
+                                  or "service-now" in str(dest).lower())
+                    is_worknote = ("work note" in msg.lower()
+                                   or "work notes" in msg.lower())
+                    created_set = rec.get("create", set())
+                    if is_sn_dest and is_worknote and len(created_set) == 1:
+                        sole = next(iter(created_set))
+                        ticket_from_db = sole
+                        tid_source = ("SN INC# inferred from sole CREATE "
+                                      "(UP 'Work notes added' row, no ticket "
+                                      "id written by addNotes on UP)")
+                        log(f"  [sn-infer] {dest}: UP 'Work notes added' row "
+                            f"carries no ticket id (ServiceNow.addNotes omits "
+                            f"it on UP) — attributing recovery work-note to "
+                            f"the sole created ticket {sole!r} for this "
+                            f"integration this cycle")
+
             if not op and st_txt == "UP" and ticket_from_db:
                 ticket = ticket_from_db
                 if ticket.lower() not in _BOGUS_TICKET_IDS:
@@ -888,6 +939,55 @@ def cmd_verify(args):
                         "status": st_txt,
                         "alert_row_time_raw": when2,
                         "ticket_id_source": tid_source + " (UP implicit)",
+                        "RequestMessageId": raw_tid if raw_tid else None,
+                        "sn_sys_id": db_sys_id,
+                    }
+                continue
+
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — TAG-LESS "create" rows (TOPdesk, PagerDuty).
+            #
+            # Not every integration tags its alert-log rows with
+            # "Operation : Create". TOPdesk (verified LIVE on the QA grid) and
+            # PagerDuty-style integrations write PLAIN rows that carry only:
+            #     Status           = DOWN / TROUBLE / CRITICAL   (the problem)
+            #     RequestMessageId = the ticket/incident id (a UUID for TOPdesk)
+            #     Message          = "New Monitor is DOWN"       (no Operation)
+            #
+            # The screenshot proof: TOPdesk incident "I-2610-089 New Monitor is
+            # DOWN" was created, and its UP recovery is a work-note INSIDE the
+            # same incident. In the alert logs that create row has NO Operation
+            # tag, so OP_RE finds nothing and the old code recorded NO create —
+            # leaving only the tag-less UP row (handled above) and a false
+            # "INFO update only" verdict for a perfectly healthy lifecycle.
+            #
+            # FIX: a problem-status row (DOWN / TROUBLE / CRITICAL) that has a
+            # real ticket id but NO Operation tag is an implicit CREATE. This
+            # mirrors the tag-less UP = update rule directly above, so the
+            # create→recover lifecycle completes for TOPdesk exactly as it does
+            # for the tag-based tools. We never invent an id — the row must
+            # already carry one (RequestMessageId / Message regex).
+            # ----------------------------------------------------------------
+            if (not op and ticket_from_db
+                    and st_txt in ("DOWN", "TROUBLE", "CRITICAL")):
+                ticket = ticket_from_db
+                if ticket.lower() not in _BOGUS_TICKET_IDS:
+                    rec["create"].add(ticket)
+                    log(f"  [note] {dest}: {st_txt} row has no Operation tag "
+                        f"but carries ticket id {ticket!r} (TOPdesk/PagerDuty "
+                        f"style) — treating as implicit CREATE")
+                    when_c = None
+                    for k in ("_zl_timestamp", "_zl_received_time",
+                              "alert_time", "time", "timestamp",
+                              "_zlf__zl_timestamp"):
+                        if e.get(k):
+                            when_c = e.get(k)
+                            break
+                    rec.setdefault("ticket_times", {})[ticket] = {
+                        "operation": "create",
+                        "status": st_txt,
+                        "alert_row_time_raw": when_c,
+                        "ticket_id_source": tid_source + " (tag-less create)",
                         "RequestMessageId": raw_tid if raw_tid else None,
                         "sn_sys_id": db_sys_id,
                     }
@@ -959,6 +1059,36 @@ def cmd_verify(args):
         for ticket in candidates:
             if ticket in rec["create"]:
                 rec["closed_on_up"].add(ticket)
+                continue
+
+            # ----------------------------------------------------------------
+            # WEB_MON ALIGNMENT — TOPdesk per-row distinct RequestMessageId.
+            #
+            # TOPdesk (verified LIVE on the QA grid) writes a DIFFERENT
+            # RequestMessageId UUID on the CREATE (DOWN) row and the recovery
+            # (UP) row, even though both belong to the SAME incident — the UP
+            # recovery is a work-note INSIDE the incident created on DOWN
+            # (screenshot: incident "I-2610-089 New Monitor is DOWN" with the
+            # UP work-note in its activity feed). So the UP ticket id will not
+            # literally equal the CREATE ticket id, and the strict
+            # "ticket in create" match above fails.
+            #
+            # DETERMINISTIC (not a guess): one monitor + one alert cycle + one
+            # integration ⇒ exactly ONE created incident and ONE recovery. When
+            # this integration recorded exactly one CREATE and exactly one
+            # UP-update candidate, they are the two halves of the same
+            # incident's lifecycle. Pair them so the create→recover cycle
+            # completes. We refuse to infer when the counts are ambiguous
+            # (0 or 2+ creates), so no false PASS is ever produced.
+            # ----------------------------------------------------------------
+            if len(rec["create"]) == 1 and len(candidates) == 1:
+                sole_create = next(iter(rec["create"]))
+                rec["closed_on_up"].add(sole_create)
+                log(f"  [topdesk-pair] {name}: recovery work-note id "
+                    f"{ticket!r} differs from the create id {sole_create!r} "
+                    f"(TOPdesk writes a distinct RequestMessageId per row for "
+                    f"the SAME incident). Exactly one create + one recovery "
+                    f"this cycle — pairing them as one completed lifecycle.")
             else:
                 log(f"  [note] {name}: UPDATE-on-UP for ticket {ticket!r} "
                     f"but no CREATE for it in this window — ticket belongs "
@@ -1032,8 +1162,22 @@ def cmd_verify(args):
                 else:
                     tid2 = TICKET_RE.search(msg)
                     if not tid2:
-                        continue
-                    ticket2 = tid2.group(1)
+                        # WEB_MON ALIGNMENT — ServiceNow "Work notes added"
+                        # UP row carries NO ticket id (addNotes omits it on
+                        # UP). Same deterministic inference as the in-window
+                        # path: sole created ticket for this ServiceNow integ.
+                        is_sn_ow = ("servicenow" in str(name).lower()
+                                    or "service now" in str(name).lower()
+                                    or "service-now" in str(name).lower())
+                        is_wn_ow = ("work note" in msg.lower()
+                                    or "work notes" in msg.lower())
+                        if (is_sn_ow and is_wn_ow and st2_ow == "UP"
+                                and len(created) == 1):
+                            ticket2 = next(iter(created))
+                        else:
+                            continue
+                    else:
+                        ticket2 = tid2.group(1)
                 if ticket2.lower() in _BOGUS_TICKET_IDS:
                     continue
             if ticket2 not in created:

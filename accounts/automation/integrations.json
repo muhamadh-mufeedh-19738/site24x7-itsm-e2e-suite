@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-30T08:40:59.537Z",
+  "captured_at": "2026-10-06T17:13:50.383Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
@@ -48,28 +48,6 @@
         "send_incident_parameters": true,
         "service_status": 0,
         "name": "Pager Duty Automation"
-      }
-    },
-    {
-      "name": "sanity",
-      "type": null,
-      "type_id": "5",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "0",
-        "auth_type": "0",
-        "down_alert": true,
-        "sender_name": "Site24x7",
-        "type": 5,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "73970000003240796",
-        "service_status": 0,
-        "name": "sanity",
-        "send_custom_parameters": false
       }
     },
     {
@@ -125,6 +103,30 @@
         "service_status": 0,
         "name": "ServiceNow Automation",
         "action_on_availability": "0"
+      }
+    },
+    {
+      "name": "TOPdesk QA Trial",
+      "type": null,
+      "type_id": "45",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "73970000003409002",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 45,
+        "title": "$MONITORNAME is $STATUS",
+        "url": "https://usatopdesktrial2.topdesk.net",
+        "selection_type": 0,
+        "caller_name": "Aaron Bennett",
+        "trouble_alert": false,
+        "critical_alert": false,
+        "service_id": "73970000003409004",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "TOPdesk QA Trial"
       }
     }
   ]

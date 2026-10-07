@@ -729,10 +729,173 @@ class PagerDuty(Tool):
         return st, incidents
 
 
+class TopDesk(Tool):
+    """TOPdesk Incident REST API.
+
+    Auth: HTTP Basic, but the password MUST be an Application Password
+    (API token) generated inside TOPdesk, NOT the user's login password.
+    We accept TOPDESK_API_TOKEN first and fall back to TOPDESK_PASSWORD so
+    either works. Read-only: only GETs the incident list / a single
+    incident. The caller name is only needed when CREATING tickets (which
+    Site24x7 does), so it is not required here.
+
+    Docs: https://developers.topdesk.com/explorer/?page=incident
+    Incidents are matched on the 'briefDescription' containing the monitor
+    name, the same window-based approach used for the other tools.
+    """
+    name = "TOPdesk"
+
+    def __init__(self):
+        self.url = env("TOPDESK_INSTANCE_URL").rstrip("/")
+        self.user = env("TOPDESK_USERNAME")
+        # Prefer the dedicated API token; fall back to password so a local
+        # file that only set TOPDESK_PASSWORD still works.
+        self.secret = env("TOPDESK_API_TOKEN") or env("TOPDESK_PASSWORD")
+
+    def configured(self):
+        return bool(self.url and self.user and self.secret)
+
+    def _headers(self):
+        raw = f"{self.user}:{self.secret}".encode()
+        return {"Authorization": "Basic " + base64.b64encode(raw).decode(),
+                "Accept": "application/json",
+                "Content-Type": "application/json"}
+
+    def connect(self):
+        if not self.configured():
+            return False, ("not configured (set TOPDESK_INSTANCE_URL, "
+                           "TOPDESK_USERNAME and TOPDESK_API_TOKEN in "
+                           ".itsm.env)")
+        # /api/incidents with a tiny page size is the cheapest readable call.
+        st, js, raw = request(
+            f"{self.url}/tas/api/incidents?page_size=1",
+            headers=self._headers())
+        if st == 200:
+            return True, "incidents endpoint readable"
+        if st in (401, 403):
+            return False, (f"auth rejected (status={st}) — check the "
+                           f"username + Application Password. {str(raw)[:120]}")
+        return False, f"status={st} {str(raw)[:150]}"
+
+    def search_by_window(self, monitor_text, since_utc, until_utc):
+        """Search TOPdesk for incidents created in this UTC window whose
+        brief description mentions the monitor."""
+        if not self.configured():
+            return []
+        # TOPdesk supports FIQL-ish query params; creationDate is ISO-8601.
+        since_str = since_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        until_str = until_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Pull the most recent incidents and filter locally (tool-side date
+        # filters have proven unreliable on other tools, so we never trust
+        # them blindly). order=-creationDate = newest first.
+        st, js, raw = request(
+            f"{self.url}/tas/api/incidents?page_size=50"
+            f"&query=creationDate=ge={since_str};creationDate=le={until_str}"
+            f"&order=creationDate+DESC",
+            headers=self._headers())
+        # Some TOPdesk versions reject the query param; retry without it.
+        if st != 200 or not isinstance(js, list):
+            st, js, raw = request(
+                f"{self.url}/tas/api/incidents?page_size=50",
+                headers=self._headers())
+        if st != 200 or not isinstance(js, list):
+            return []
+        out = []
+        for inc in js:
+            if not isinstance(inc, dict):
+                continue
+            brief = str(inc.get("briefDescription") or "")
+            request_txt = str(inc.get("request") or "")
+            haystack = (brief + " " + request_txt).lower()
+            if monitor_text.lower() not in haystack:
+                continue
+            created = inc.get("creationDate")
+            dt, how = parse_ticket_time(created, "topdesk")
+            # Local time filter is the safety net.
+            if dt and (dt < since_utc or dt > until_utc):
+                continue
+            status = inc.get("processingStatus")
+            if isinstance(status, dict):
+                status = status.get("name")
+            if not status:
+                status = "closed" if inc.get("closed") else "open"
+            out.append({"ticket_id": str(inc.get("number")
+                                         or inc.get("id") or ""),
+                        "status": str(status or ""),
+                        "summary": brief[:80],
+                        "created_raw": created,
+                        "created_utc": dt.isoformat() if dt else None,
+                        "read_as": how,
+                        "source": "TOPdesk"})
+        return out
+
+    def get_ticket(self, tid):
+        if not self.configured():
+            return {"found": False, "error": "not configured"}
+        # TOPdesk incidents are referenced by number (e.g. I-2401-001) or
+        # by sys id. Try the human number first.
+        st, js, raw = request(
+            f"{self.url}/tas/api/incidents/number/"
+            f"{urllib.parse.quote(str(tid))}",
+            headers=self._headers())
+        if st != 200 or not isinstance(js, dict):
+            st, js, raw = request(
+                f"{self.url}/tas/api/incidents/id/"
+                f"{urllib.parse.quote(str(tid))}",
+                headers=self._headers())
+        if st == 200 and isinstance(js, dict):
+            status = js.get("processingStatus")
+            if isinstance(status, dict):
+                status = status.get("name")
+            if not status:
+                status = "closed" if js.get("closed") else "open"
+            return {"found": True, "status": str(status),
+                    "summary": str(js.get("briefDescription", ""))[:80]}
+        if st == 404:
+            return {"found": False, "error": "incident not found"}
+        return {"found": False, "error": f"status={st} {str(raw)[:120]}"}
+
+    def search_recent(self, text, limit=10):
+        """List recent incidents whose brief description contains `text`.
+
+        Mirrors ServiceNow.search_recent so the no-ticket-id fallback in
+        cmd_verify works for TOPdesk too (TOPdesk's Alert Log lines, like
+        ServiceNow's, may not carry a usable incident number). Returns
+        (status, rows) where rows have number/status/created fields.
+        """
+        if not self.configured():
+            return None, []
+        st, js, raw = request(
+            f"{self.url}/tas/api/incidents?page_size={int(limit)}"
+            f"&order=creationDate+DESC",
+            headers=self._headers())
+        rows = []
+        if st == 200 and isinstance(js, list):
+            for inc in js:
+                if not isinstance(inc, dict):
+                    continue
+                brief = str(inc.get("briefDescription") or "")
+                if text.lower() not in brief.lower():
+                    continue
+                status = inc.get("processingStatus")
+                if isinstance(status, dict):
+                    status = status.get("name")
+                if not status:
+                    status = "closed" if inc.get("closed") else "open"
+                rows.append({
+                    "number": inc.get("number") or inc.get("id"),
+                    "status": str(status or ""),
+                    "closed": bool(inc.get("closed")),
+                    "short_description": brief[:100],
+                    "creationDate": inc.get("creationDate"),
+                })
+        return st, rows
+
+
 def build_tools():
     return {"halo": Halo(), "servicenow": ServiceNow(),
             "zohodesk": ZohoDesk(), "sdp": SDP(),
-            "pagerduty": PagerDuty()}
+            "pagerduty": PagerDuty(), "topdesk": TopDesk()}
 
 
 # Site24x7's own "Alert Mode" / communicationmode value -> adapter key.
@@ -750,6 +913,7 @@ MODE_INT_TO_TOOL = {
     14: "servicenow",   # ServiceNow
     24: "zohodesk",     # ZDESK — Zoho Desk
     52: "halo",         # HaloITSM
+    54: "topdesk",      # TOPdesk (CommunicationMode seen live on the QA grid)
     15: "opsgenie",     # OpsGenie (no adapter yet)
     23: "jira",         # Jira (no adapter yet)
     29: "freshservice", # FreshService (no adapter yet)
@@ -773,12 +937,16 @@ MODE_TO_TOOL = {
     "halo":                   "halo",
     "pagerduty":              "pagerduty",
     "pager duty":             "pagerduty",
+    "topdesk":                "topdesk",
+    "top desk":               "topdesk",
+    "topdesk itsm":           "topdesk",
     # integer strings — from stage3 storing comm_mode_int as str
     "6":                      "sdp",
     "9":                      "pagerduty",
     "14":                     "servicenow",
     "24":                     "zohodesk",
     "52":                     "halo",
+    "54":                     "topdesk",
 }
 
 # Delivery modes that are real, but are NOT ticketing tools. There will
@@ -807,6 +975,8 @@ TZ_OVERRIDES = {            # hours to ADD to a tool's naive timestamp to
     "halo": None,
     "zohodesk": None,
     "sdp": None,
+    "topdesk": None,        # TOPdesk returns ISO-8601 with an offset, so this
+                            # is only a fallback for naive timestamps.
 }
 
 
@@ -988,7 +1158,9 @@ def pick_tool(integration_name, tools, delivery_modes=None):
         return tools["servicenow"]
     if "halo" in n:
         return tools["halo"]
-    if "desk" in n or "zoho" in n:
+    if "topdesk" in n or "top desk" in n:
+        return tools.get("topdesk")
+    if "zoho" in n or ("desk" in n and "topdesk" not in n):
         return tools["zohodesk"]
     if "pager" in n or "pagerduty" in n:
         return tools.get("pagerduty")
@@ -1173,9 +1345,14 @@ def cmd_verify(args):
             continue
         if not ids:
             log("    [INFO] Alert Logs gave no ticket id for this integration")
-            if isinstance(tool, ServiceNow) and args.monitor_text:
+            # Some tools' Alert Log lines carry no usable ticket id (ServiceNow
+            # posts a work-note on UP without the number; TOPdesk can behave the
+            # same way). For those, fall back to a text search in the tool —
+            # exactly the same monitor-text matching used everywhere else.
+            if (isinstance(tool, (ServiceNow, TopDesk))
+                    and args.monitor_text):
                 st, rows = tool.search_recent(args.monitor_text, limit=10)
-                log(f"    searching ServiceNow by text "
+                log(f"    searching {tool.name} by text "
                     f"'{args.monitor_text}' -> status={st}, {len(rows)} row(s)")
 
                 # FIX (silent failure): a 401/500 returns zero rows, and zero
@@ -1206,13 +1383,17 @@ def cmd_verify(args):
                     log("           listed — including ones from earlier "
                         "runs. Pass --since.")
 
+                # Field names differ per tool: ServiceNow uses
+                # sys_created_on/state, TOPdesk uses creationDate/status.
+                tz_key = "topdesk" if isinstance(tool, TopDesk) else "servicenow"
                 kept, skipped_old = [], 0
                 for r in rows:
-                    created = r.get("sys_created_on")
+                    created = (r.get("sys_created_on")
+                               or r.get("creationDate"))
                     if isinstance(created, dict):
                         created = created.get("value") or created.get(
                             "display_value")
-                    dt, how = parse_ticket_time(created, "servicenow")
+                    dt, how = parse_ticket_time(created, tz_key)
                     verdict_t = in_window(dt, since_utc, until_utc)
                     r["_created_raw"] = created
                     r["_created_utc"] = dt.isoformat() if dt else None
@@ -1233,8 +1414,16 @@ def cmd_verify(args):
                 still_open = 0
                 found_rows = []
                 for r in rows[:10]:
-                    state = str(r.get("state"))
-                    is_open = state in open_states
+                    # TOPdesk marks a finished incident with closed=true; its
+                    # processingStatus name is free-text per-instance, so the
+                    # boolean is the reliable signal.
+                    if isinstance(tool, TopDesk):
+                        is_open = not bool(r.get("closed"))
+                        state = str(r.get("status") or
+                                    ("closed" if r.get("closed") else "open"))
+                    else:
+                        state = str(r.get("state"))
+                        is_open = state in open_states
                     if is_open:
                         still_open += 1
                     log(f"      - {r.get('number')}  state={state}"

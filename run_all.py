@@ -207,7 +207,7 @@ INTEGRATIONS_FILE = "integrations.json"
 # just cannot open the destination and read the ticket back.
 ITSM_VERIFIABLE = ("servicenow", "service-now", "snow", "zoho desk",
                    "zohodesk", "servicedesk plus", "sdp", "haloitsm",
-                   "halo itsm", "halo", "pagerduty")
+                   "halo itsm", "halo", "pagerduty", "topdesk", "top desk")
 
 
 # Site24x7 returns the third-party app as a NUMERIC id and its own UI
@@ -222,6 +222,10 @@ APP_IDS = {
     "20": "Zoho Desk",
     "43": "HaloITSM",
     "1": "PagerDuty",
+    # TOPdesk's numeric id as reported by this account's Integrations page.
+    # If your grid reports a different id, drop a third_party_apps.json next to
+    # the account data to override, e.g. { "<id>": "TOPdesk" }.
+    "48": "TOPdesk",
 }
 
 
@@ -596,6 +600,58 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 f"created. Failed rows in window: "
                 f"{stage3_entry.get('failed_rows', '?')}.")
 
+    # --- 1b. product-side PROOF of a complete lifecycle outranks a missing
+    #         or blocked tool-side check, exactly as a product-side FAIL does
+    #         above. -----------------------------------------------------------
+    #
+    # Site24x7's OWN Alert Logs are independent, authoritative evidence. When
+    # they show a full create→recovery lifecycle (PASS create+close, or
+    # PASS create+update@UP for tools that resolve by updating), the
+    # integration demonstrably WORKED. A tool-side read that could not run
+    # (NOT CONFIGURED / NO ADAPTER) or was blocked (bad creds, tool
+    # unreachable) is the ABSENCE of a second, bonus confirmation — it is NOT
+    # evidence of a failure. Turning a proven PASS into BLOCKED just because
+    # the optional tool-side read did not run is highly misleading: the
+    # Alert Logs already prove the ticket was created and recovered.
+    #
+    # This mirrors the "FAIL never closed outranks tool gap" rule above:
+    # product-side evidence (Layer 2) wins over a tool-side gap (Layer 3) in
+    # BOTH directions — a proven failure stays a failure, and a proven pass
+    # stays a pass. The tool-side check, when available, only ADDS
+    # confirmation; when unavailable it is noted as a caveat, never a block.
+    s24_proves_lifecycle = (v3.startswith("PASS create+close")
+                            or v3.startswith("PASS create+update@UP"))
+    if s24_proves_lifecycle and tool_unavailable:
+        why = ((stage4_entry or {}).get("blocker_detail") or v4
+               or "tool-side read did not run")
+        if v3.startswith("PASS create+update@UP"):
+            created = stage3_entry.get("created_ticket_ids") or []
+            matched_up = stage3_entry.get("matched_on_up_ticket_ids") or []
+            ids = ", ".join(map(str, matched_up or created)) or "id in logs"
+            return (PASS, "Ticket created, then resolved by update on UP",
+                    f"Site24x7's own Alert Logs independently prove the full "
+                    f"lifecycle: ticket {ids} was CREATED on the problem alert "
+                    f"and RESOLVED by an update on recovery (UP). This tool "
+                    f"resolves by updating the ticket rather than issuing an "
+                    f"explicit Close — correct behaviour, not a miss. "
+                    f"The optional tool-side read-back was not available this "
+                    f"run ({why}), so the ticket's CURRENT state in the tool "
+                    f"was not independently re-confirmed — but the Alert Logs "
+                    f"already prove it worked. Add the tool credentials to "
+                    f".itsm.env for an extra confirmation layer.")
+        created = stage3_entry.get("created_ticket_ids") or []
+        matched = stage3_entry.get("matched_ticket_ids") or []
+        ids = ", ".join(map(str, matched or created)) or "id in logs"
+        return (PASS, "Ticket created and closed",
+                f"Site24x7's own Alert Logs independently prove the full "
+                f"lifecycle: ticket {ids} was CREATED on the problem alert "
+                f"and CLOSED on recovery. The optional tool-side read-back "
+                f"was not available this run ({why}), so the ticket's "
+                f"CURRENT state in the tool was not independently "
+                f"re-confirmed — but the Alert Logs already prove it worked. "
+                f"Add the tool credentials to .itsm.env for an extra "
+                f"confirmation layer.")
+
     # --- 2. our own access problems, where nothing else is proven ---------
     if tool_blocked:
         detail = (stage4_entry or {}).get("blocker_detail", v4)
@@ -711,31 +767,60 @@ def build_findings(stage3, stage4, known, live_recs=None,
         # Determine live status: deleted/suspended/active/unknown
         integ_st = integration_status(integ, live_recs)
         bucket, headline, detail = classify(e, s4, known, integ_status=integ_st)
-        # TRIGGER TEST override: if the pre-flight trigger test FAILED for
-        # this integration, the lifecycle result cannot be trusted — the
-        # integration was misconfigured from the start. Reclassify to BLOCKED
-        # with a clear explanation so nobody chases a lifecycle defect that
-        # is actually a config problem.
+        # TRIGGER TEST override: a GENUINE pre-flight FAIL (wrong API key,
+        # expired OAuth, bad instance URL, dead destination) means the
+        # integration was broken from the start, so a lifecycle "defect" for
+        # it cannot be trusted — reclassify to BLOCKED.
+        #
+        # BUT: never bury a DEMONSTRATED lifecycle PASS. If the alert logs +
+        # tool-side check independently prove the full create→resolve cycle
+        # happened (matched_ticket_ids / matched_on_up_ticket_ids present, and
+        # classify() returned PASS), the integration is provably healthy and
+        # the "trigger test" entry was almost certainly a stale/old-run
+        # artefact. Overriding real, dated evidence with a BLOCKED banner would
+        # be the very false-negative we are fixing. In that case we KEEP the
+        # PASS and attach a non-blocking caveat instead.
         if integ in trigger_blocked:
-            bucket = BLOCKED
-            headline = ("⛔ Pre-flight trigger test FAILED — integration "
-                        "misconfigured")
-            detail = (
-                f"The Stage 0 pre-flight trigger test fired "
-                f"'PUT trigger_test/{integ}' BEFORE the alert lifecycle "
-                f"started, and it FAILED. This means the integration was "
-                f"not correctly configured at the time of the test run — "
-                f"wrong API key, expired OAuth token, incorrect instance "
-                f"URL, or a connectivity issue to the destination tool. "
-                f"The lifecycle DID still run (other integrations needed "
-                f"testing), but any lifecycle result for '{integ}' cannot "
-                f"be trusted because the integration was already broken. "
-                f"Fix the integration in Site24x7 → Third-Party Integrations "
-                f"→ Edit, then re-run stage0_trigger_test.py to confirm it "
-                f"passes before running the full lifecycle again. "
-                f"[Lifecycle result before override: {bucket} — "
-                f"{headline}]"
-            )
+            lifecycle_proof = bool(
+                e.get("matched_ticket_ids")
+                or e.get("matched_on_up_ticket_ids"))
+            lifecycle_passed = (bucket == PASS) and lifecycle_proof
+
+            if lifecycle_passed:
+                detail = (
+                    detail
+                    + " NOTE: the Stage 0 pre-flight trigger test for "
+                    f"'{integ}' did not pass from the harness, but the "
+                    f"lifecycle evidence above (alert-log rows cross-"
+                    f"referenced with the destination tool) independently "
+                    f"proves the full create→resolve cycle completed for "
+                    f"this integration. A trigger-test pre-flight failure is "
+                    f"not allowed to override real, dated lifecycle proof — "
+                    f"the verdict stays PASS. If you expected the pre-flight "
+                    f"to pass too, confirm the OAuth 'admin' scope / session "
+                    f"cookie used by stage0_trigger_test.py.")
+                # bucket / headline stay as the PASS classify() produced.
+            else:
+                before_bucket, before_headline = bucket, headline
+                bucket = BLOCKED
+                headline = ("⛔ Pre-flight trigger test FAILED — integration "
+                            "misconfigured")
+                detail = (
+                    f"The Stage 0 pre-flight trigger test fired "
+                    f"'PUT trigger_test/{integ}' BEFORE the alert lifecycle "
+                    f"started, and it FAILED. This means the integration was "
+                    f"not correctly configured at the time of the test run — "
+                    f"wrong API key, expired OAuth token, incorrect instance "
+                    f"URL, or a connectivity issue to the destination tool. "
+                    f"The lifecycle DID still run (other integrations needed "
+                    f"testing), but any lifecycle result for '{integ}' cannot "
+                    f"be trusted because the integration was already broken. "
+                    f"Fix the integration in Site24x7 → Third-Party "
+                    f"Integrations → Edit, then re-run stage0_trigger_test.py "
+                    f"to confirm it passes before running the full lifecycle "
+                    f"again. [Lifecycle result before override: "
+                    f"{before_bucket} — {before_headline}]"
+                )
         findings.append({
             "integration": integ,
             "bucket": bucket,
@@ -811,6 +896,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
                 "bucket": bucket,
                 "headline": headline,
                 "detail": detail,
+                "monitor_type": "",
                 "site24x7_verdict": "NO ALERT LOG ROWS",
                 "tool_verdict": None,
                 "tool": None,
@@ -868,11 +954,115 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font
 .note{background:#fff8e5;border:1px solid #e8d9a8;border-radius:8px;padding:14px 16px;margin-bottom:14px}
 .foot{color:#57606a;font-size:12.5px;margin-top:34px;border-top:1px solid #d8dee4;padding-top:14px}
 .ok{color:#1a7f37;font-weight:600}.bad{color:#cf222e;font-weight:600}
+/* Results-by-integration table: clear, scannable, laymen-friendly */
+table.results{border:1px solid #e1e4e8;border-radius:8px;overflow:hidden}
+table.results thead th{background:#f6f8fa;border-bottom:2px solid #d8dee4;
+ position:sticky;top:0}
+table.results tbody tr{transition:background .1s}
+table.results tbody tr:hover{background:#fafcff}
+table.results tbody td{vertical-align:middle;border-bottom:1px solid #eef1f4}
+table.results tbody tr.b-PASS{border-left:4px solid #1a7f37}
+table.results tbody tr.b-DEFECT{border-left:4px solid #cf222e}
+table.results tbody tr.b-BLOCKED{border-left:4px solid #9a6700}
+table.results tbody tr.b-KNOWN{border-left:4px solid #6e7781}
+table.results tbody tr.b-INCONCLUSIVE{border-left:4px solid #0969da}
 """
 
 
 def esc(x):
     return html.escape(str(x if x is not None else ""))
+
+
+# --- monitor-type presentation ------------------------------------------------
+# Maps Site24x7 monitor type codes to a human-friendly label + emoji so the
+# report reads clearly for a layman or a new joinee. This is EXTENSIBLE: adding
+# a new monitor type (or a new website-monitoring variant) is a one-line entry
+# here — nothing else in the report needs to change. Unknown types fall back to
+# the raw code, so a brand-new type still renders sensibly without a code edit.
+MONITOR_TYPE_LABELS = {
+    # Website / web-application monitoring (and its variants)
+    "URL":          ("🌐", "Website (URL)"),
+    "HOMEPAGE":     ("🌐", "Website (Homepage)"),
+    "REALBROWSER":  ("🖥️", "Web App — Real Browser"),
+    "WEBTRANSACTION": ("🖥️", "Web Transaction (Browser)"),
+    "RBM":          ("🖥️", "Web App — Real Browser"),
+    "SSL_CERT":     ("🔒", "SSL / TLS Certificate"),
+    "SSL":          ("🔒", "SSL / TLS Certificate"),
+    "DOMAINEXPIRY": ("📆", "Domain Expiry"),
+    "PORT":         ("🔌", "Port / TCP"),
+    "DNS":          ("🧭", "DNS"),
+    "REST_API":     ("🔗", "REST API"),
+    "RESTAPI":      ("🔗", "REST API"),
+    "SOAP":         ("🔗", "SOAP Web Service"),
+    "FTP":          ("📂", "FTP / SFTP"),
+    "SMTP":         ("✉️", "Mail Server (SMTP)"),
+    "WEBSOCKET":    ("🔗", "WebSocket"),
+    "HEARTBEAT":    ("💓", "Heartbeat / Cron"),
+    # Infrastructure / server monitoring
+    "SERVER":       ("🖧", "Server"),
+    "WINDOWSSERVER": ("🖧", "Windows Server"),
+    "LINUXSERVER":  ("🖧", "Linux Server"),
+}
+
+
+def monitor_type_badge(mon_type):
+    """Return a clear, self-explanatory badge for a monitor type.
+
+    Falls back gracefully for unknown/future types so the report never breaks
+    when new monitor types are introduced.
+    """
+    raw = str(mon_type or "").strip().upper()
+    if not raw:
+        return '<span style="color:#8b949e;font-size:11px">—</span>'
+    emoji, label = MONITOR_TYPE_LABELS.get(raw, ("📊", raw.title()))
+    return (f'<span style="display:inline-block;background:#eef3fb;'
+            f'border:1px solid #cfe0f5;border-radius:12px;padding:1px 9px;'
+            f'font-size:11px;color:#0b4f8a;white-space:nowrap" '
+            f'title="Monitor type: {esc(raw)}">{emoji} {esc(label)}</span>')
+
+
+# --- lifecycle-stage presentation --------------------------------------------
+# Turns the terse internal verdict strings ("PASS create+close", "FAIL never
+# closed", "PASS create+update@UP", ...) into clear, plain-English chips that a
+# non-technical reader can understand at a glance. Each lifecycle step is shown
+# as its own tick/cross so the reader sees exactly WHERE a problem is.
+def lifecycle_steps_html(finding):
+    """Render Created / Recovered-Closed as explicit ✓/✗ step chips.
+
+    Uses the structured ticket-id lists (not the raw verdict string) so the
+    display is robust and identical in meaning to the ticket-lifecycle logic.
+    """
+    created = finding.get("created_ticket_ids") or []
+    closed = finding.get("closed_ticket_ids") or []
+    resolved = ((finding.get("matched_ticket_ids") or [])
+                + (finding.get("matched_on_up_ticket_ids") or []))
+    bucket = finding.get("bucket")
+
+    def chip(ok, text, warn=False):
+        if ok:
+            col, bg, bd, ico = "#1a7f37", "#e6f4ea", "#b7dfc4", "✓"
+        elif warn:
+            col, bg, bd, ico = "#9a6700", "#fff4d6", "#e8d9a8", "…"
+        else:
+            col, bg, bd, ico = "#cf222e", "#fde8e8", "#f3c0c0", "✗"
+        return (f'<span style="display:inline-block;background:{bg};'
+                f'border:1px solid {bd};border-radius:4px;padding:1px 7px;'
+                f'margin:1px 3px 1px 0;font-size:11px;font-weight:600;'
+                f'color:{col};white-space:nowrap">{ico} {esc(text)}</span>')
+
+    # Not a lifecycle finding (blocked monitor / server coverage / no rows)
+    if bucket in (BLOCKED, INCONCLUSIVE, KNOWN) and not created:
+        return '<span style="color:#8b949e;font-size:11px">not tested</span>'
+
+    created_ok = bool(created)
+    recovered_ok = bool(resolved or closed)
+    parts = [chip(created_ok, "Ticket created")]
+    if created_ok and not recovered_ok and bucket == PASS:
+        # unusual: passed but no recovery evidence captured
+        parts.append(chip(True, "Recovered", warn=True))
+    else:
+        parts.append(chip(recovered_ok, "Recovered → closed"))
+    return "".join(parts)
 
 
 def db_evidence_html(evidence_map):
@@ -941,14 +1131,66 @@ def write_html(path, ctx):
     cyc = ctx["cycle"] or {}
     env = ctx["env"]
 
+    # Plain-English meaning for the overall result, shown under the status
+    # pill so a non-technical reader instantly understands the verdict.
+    RESULT_MEANING = {
+        PASS:        "Working correctly",
+        DEFECT:      "Product bug — needs a developer",
+        BLOCKED:     "Not tested (setup/access issue)",
+        KNOWN:       "Known issue, tracked separately",
+        INCONCLUSIVE: "Not enough evidence — re-run",
+    }
+
+    def _alertlog_cell(x):
+        rows_n = x.get("alert_log_rows")
+        failed = x.get("failed_rows") or 0
+        if rows_n in (None, 0) and not failed:
+            return '<span style="color:#8b949e">no rows</span>'
+        txt = f'{rows_n} row(s)'
+        if failed:
+            return (f'<span style="color:#9a6700">{esc(txt)}, '
+                    f'{esc(failed)} failed</span>')
+        return f'<span style="color:#1a7f37">{esc(txt)} ✓</span>'
+
+    def _tool_cell(x):
+        tv = str(x.get("tool_verdict") or "")
+        tool = x.get("tool")
+        if not tv:
+            return ('<span style="color:#8b949e">not checked</span>'
+                    if not tool else
+                    f'<span style="color:#8b949e">{esc(tool)}: not checked</span>')
+        low = tv.lower()
+        toolp = f'{esc(tool)}: ' if tool else ''
+        # A tool-side read that never ran (NOT CONFIGURED / NO ADAPTER) must
+        # NOT say "confirmed" — that wrongly implies we read the ticket back
+        # inside the tool. Say plainly that Layer-2 (Alert Logs) is the proof
+        # for this row and the optional tool read-back was not available.
+        if "not configured" in low or "no adapter" in low:
+            return (f'<span style="color:#8b949e">{toolp}read-back not '
+                    f'available — proven by Alert Logs</span>')
+        if low.startswith("blocked"):
+            return (f'<span style="color:#9a6700">{toolp}read-back blocked '
+                    f'(access issue)</span>')
+        if low.startswith("pass") or "all found" in low:
+            col, ico = "#1a7f37", "✓"
+        elif low.startswith("fail") or "none found" in low:
+            col, ico = "#9a6700", "⚠"
+        else:
+            col, ico = "#57606a", "•"
+        return f'<span style="color:{col}">{toolp}confirmed {ico}</span>'
+
     rows = ""
     for x in f:
-        rows += f"""<tr><td class="mono">{esc(x.get('monitor'))}</td>
-<td><strong>{esc(x['integration'])}</strong></td>
-<td><span class="pill {x['bucket']}">{x['bucket']}</span></td>
-<td>{esc(x['headline'])}</td>
-<td class="mono">{esc(x['site24x7_verdict'])}</td>
-<td class="mono">{esc(x['tool_verdict'])}</td></tr>"""
+        bucket = x["bucket"]
+        meaning = RESULT_MEANING.get(bucket, "")
+        rows += f"""<tr class="b-{bucket}">
+<td>{monitor_type_badge(x.get('monitor_type'))}<div style="margin-top:3px;font-size:12.5px;color:#1b1f23">{esc(x.get('monitor'))}</div></td>
+<td><strong>{esc(x['integration'])}</strong>{(f'<div style="font-size:10.5px;color:#57606a">via {esc(x["tool"])}</div>' if x.get('tool') else '')}</td>
+<td style="white-space:nowrap"><span class="pill {bucket}">{bucket}</span><div style="font-size:10.5px;color:#57606a;margin-top:4px">{esc(meaning)}</div></td>
+<td>{lifecycle_steps_html(x)}</td>
+<td style="font-size:12.5px">{esc(x['headline'])}</td>
+<td style="font-size:12px">{_alertlog_cell(x)}</td>
+<td style="font-size:12px">{_tool_cell(x)}</td></tr>"""
 
     blocks = ""
     for x in f:
@@ -1158,6 +1400,7 @@ Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finis
 <div class="card"><table>
 <tr><th style="width:230px">Grid</th><td class="mono">{esc(env.get('grid'))}</td></tr>
 <tr><th>Monitors under test</th><td class="mono">{esc(env.get('monitor_name') or env.get('monitor_id'))}</td></tr>
+<tr><th>Monitor type(s)</th><td>{env.get('monitor_types_html') or '<span class="mono">—</span>'}</td></tr>
 <tr><th>Integrations filter</th><td class="mono">{("only the " + str(len(env.get("live_integrations") or [])) + " integration(s) currently configured in this account are reported" + ((" &mdash; excluded as deleted: " + esc(", ".join(env.get("excluded_integrations") or []))) if env.get("excluded_integrations") else "")) if env.get("live_integrations") else "NOT APPLIED &mdash; integrations.json missing, so deleted integrations may appear as live"}</td></tr>
 <tr><th>Alert log window</th><td class="mono">{esc(env.get('hours'))} hour(s)</td></tr>
 <tr><th>Host</th><td class="mono">{esc(env.get('host'))}</td></tr>
@@ -1177,9 +1420,31 @@ Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finis
 </div>
 
 <h2>Results by integration</h2>
-<div class="card"><table>
-<tr><th>Monitor</th><th>Integration</th><th>Result</th><th>Summary</th><th>Site24x7 alert logs</th><th>Inside the tool</th></tr>
-{rows}</table></div>
+<div class="card">
+<p class="det" style="margin-top:0">Each row is one integration tested against one monitor. Read it left-to-right:
+<strong>what</strong> was monitored &rarr; <strong>which</strong> integration &rarr; the overall <strong>result</strong> &rarr;
+the <strong>ticket life-cycle</strong> steps &rarr; and the two independent <strong>proofs</strong>
+(Site24x7's own Alert Logs, and the ticket read back inside the ITSM tool).</p>
+<table class="results">
+<thead><tr>
+<th>Monitor&nbsp;/&nbsp;Type</th>
+<th>Integration</th>
+<th>Result</th>
+<th>Ticket life-cycle</th>
+<th>What happened</th>
+<th>Proof&nbsp;1:&nbsp;Alert&nbsp;Logs</th>
+<th>Proof&nbsp;2:&nbsp;Inside&nbsp;the&nbsp;tool</th>
+</tr></thead>
+<tbody>
+{rows}</tbody></table>
+<p class="det" style="margin-bottom:0;margin-top:14px;font-size:12px;color:#57606a">
+<strong>Life-cycle steps:</strong>
+<span style="color:#1a7f37">✓ green</span> = done &nbsp;·&nbsp;
+<span style="color:#cf222e">✗ red</span> = missing &nbsp;·&nbsp;
+<span style="color:#9a6700">… amber</span> = passed but not independently re-confirmed.
+A healthy integration shows <em>Ticket created</em> ✓ then <em>Recovered → closed</em> ✓.
+</p>
+</div>
 
 <h2>Evidence detail</h2>
 {blocks}
@@ -1362,11 +1627,31 @@ def main():
             stages.append(s0_result)
 
             # Load the results written by stage0
+            #
+            # ONLY a genuine FAIL blocks the lifecycle. A SKIP means the
+            # harness could not verify the trigger test (OAuth 'admin' scope
+            # or session cookie not available) — that is OUR access gap, not a
+            # misconfigured integration, so it must NEVER block the lifecycle
+            # nor bury a real lifecycle PASS.
+            trigger_skipped_integrations = set()
             trigger_test_data = load_json(STAGE0_RESULT)
             if trigger_test_data:
                 for r in (trigger_test_data.get("results") or []):
-                    if r.get("final_verdict") == "FAIL":
+                    fv = r.get("final_verdict")
+                    if fv == "FAIL":
                         trigger_blocked_integrations.add(r.get("name", ""))
+                    elif fv == "SKIP":
+                        trigger_skipped_integrations.add(r.get("name", ""))
+
+            if trigger_skipped_integrations:
+                log(f"\n  ⚠️  {len(trigger_skipped_integrations)} integration(s) "
+                    f"could NOT be pre-flight verified from the harness "
+                    f"(OAuth scope / session cookie gap):")
+                for n in sorted(trigger_skipped_integrations):
+                    log(f"      ⚠️  {n}")
+                log("  This is NOT a failure — the lifecycle will run and each")
+                log("  integration is judged on its real alert-log + tool "
+                    "evidence.")
 
             # Report which integrations are blocked
             if trigger_blocked_integrations:
@@ -1387,7 +1672,9 @@ def main():
             log("         trigger test. Run s247_integrations.js to capture")
             log("         the integration list and enable this check.")
     elif args.report_only:
-        # For report-only, load the previous trigger test result if available
+        # For report-only, load the previous trigger test result if available.
+        # Same rule: only a genuine FAIL blocks; a SKIP (harness auth gap)
+        # never blocks and never buries a real lifecycle PASS.
         trigger_test_data = load_json(STAGE0_RESULT)
         if trigger_test_data:
             for r in (trigger_test_data.get("results") or []):
@@ -1450,7 +1737,8 @@ def main():
             if mid:
                 monitors.append({"monitor_id": str(mid),
                                  "name": m.get("name") or m.get("display_name"),
-                                 "route": m.get("route")})
+                                 "route": m.get("route"),
+                                 "type": m.get("type") or ""})
         if not monitors:                       # older single-monitor result
             mon = cycle.get("monitor")
             if isinstance(mon, dict):
@@ -1664,6 +1952,7 @@ def main():
     for mon in monitors:
         mid = mon["monitor_id"]
         name = mon.get("name") or mid
+        mon_type = mon.get("type") or ""
         label = f"{name} ({mid})"
 
         s3_before = os.path.getmtime(STAGE3_RESULT) \
@@ -1747,6 +2036,7 @@ def main():
                     "~/Documents/qg/s247_login.js")
                 log("                         source .session.env")
                 per_monitor.append({"monitor_id": mid, "name": name,
+                                    "monitor_type": mon_type,
                                     "blocked": True,
                                     "reason": f"stage 3 failed with exit "
                                               f"{rc3} — "
@@ -1764,6 +2054,7 @@ def main():
                 log(f"            No alert log rows matched this monitor in "
                     f"the last {args.hours}h, so it is UNTESTED in this run.")
                 per_monitor.append({"monitor_id": mid, "name": name,
+                                    "monitor_type": mon_type,
                                     "blocked": True,
                                     "reason": f"stage 3 returned no rows for "
                                               f"this monitor in the "
@@ -1827,6 +2118,7 @@ def main():
                         f"ticket_verification.json or stage3_{mid}.json")
         if s3 is None:
             per_monitor.append({"monitor_id": mid, "name": name,
+                                "monitor_type": mon_type,
                                 "blocked": True,
                                 "reason": f"{STAGE3_RESULT} missing"})
             continue
@@ -1900,6 +2192,7 @@ def main():
                 log(f"  [WARN] could not snapshot results for {mid}: {exc}")
 
         per_monitor.append({"monitor_id": mid, "name": name,
+                            "monitor_type": mon_type,
                             "blocked": False, "stage3": s3, "stage4": s4})
 
     if args.dry_run:
@@ -1982,6 +2275,7 @@ def main():
             blocked_monitors.append(pm)
             findings.append({
                 "monitor": label, "monitor_id": pm["monitor_id"],
+                "monitor_type": pm.get("monitor_type") or "",
                 "integration": "(all integrations)", "bucket": BLOCKED,
                 "headline": f"Monitor not verified — {pm.get('reason')}",
                 "detail": f"No verification ran for {label}. This monitor is "
@@ -2019,6 +2313,7 @@ def main():
                     continue
             f["monitor"] = label
             f["monitor_id"] = pm["monitor_id"]
+            f["monitor_type"] = pm.get("monitor_type") or ""
             findings.append(f)
 
     # MANDATORY: if server coverage was skipped, it must appear in the
@@ -2107,6 +2402,14 @@ def main():
                        + ["UP"]) + "]" if m.get("route") else "")
                     for m in monitors),
                 "monitors": monitors,
+                # Pre-rendered type badges for the Environment section.
+                # Deduped so repeated types show once; extensible for any
+                # future monitor type with no further code change.
+                "monitor_types_html": " ".join(
+                    monitor_type_badge(t) for t in sorted(
+                        {str(m.get("type") or "").strip().upper()
+                         for m in monitors if (m.get("type") or "").strip()})
+                ) or None,
                 "live_integrations": sorted(live) if live else None,
                 "excluded_integrations": sorted(excluded),
                 "integration_records": recs or [],

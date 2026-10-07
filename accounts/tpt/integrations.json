@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-29T09:09:34.893Z",
+  "captured_at": "2026-09-30T13:01:07.900Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
@@ -120,6 +120,33 @@
         "send_incident_parameters": true,
         "service_status": 0,
         "name": "https://integrations-qa.localsite24x7.com/app/client?a=f#/home/monitors"
+      }
+    },
+    {
+      "name": "https://integrations-qa.localsite24x7.com/app/client#/home/monitors",
+      "type": null,
+      "type_id": "8",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "method": "G",
+        "down_alert": true,
+        "is_poller_webhook": false,
+        "module": "1",
+        "encode_param": false,
+        "type": 8,
+        "url": "https://integrations-qa.localsite24x7.com/app/client#/home/monitors",
+        "timeout": "30",
+        "selection_type": 0,
+        "send_in_json_format": false,
+        "auth_method": "B",
+        "trouble_alert": false,
+        "critical_alert": false,
+        "service_id": "45233000020625028",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "https://integrations-qa.localsite24x7.com/app/client#/home/monitors",
+        "manage_tickets": false
       }
     },
     {
