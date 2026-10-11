@@ -75,7 +75,7 @@ LOGIN_JS = os.environ.get(
 
 # Files that belong to an ACCOUNT, not to the code.
 ACCOUNT_FILES = [".itsm.env", ".session.env", "allowlist.json",
-                 "test_config.json", "known_issues.json"]
+                 "test_config.json", "known_issues.json", "scope.json"]
 
 TEMPLATE = """# Account settings for '{name}'.
 # Paths may use ~ and are resolved from your home folder.

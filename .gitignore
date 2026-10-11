@@ -36,10 +36,12 @@ integrations_list.txt
 # known_issues.json   → triaged known bugs (safe)
 # test_config.json    → monitor inventory (safe)
 # integrations.json   → live integrations snapshot (safe)
+# scope.json          → the integrations this suite is responsible for (safe)
 !accounts/*/allowlist.json
 !accounts/*/known_issues.json
 !accounts/*/test_config.json
 !accounts/*/integrations.json
+!accounts/*/scope.json
 
 # ─── Node / Python ────────────────────────────────────────────────────────────
 node_modules/

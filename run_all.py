@@ -81,6 +81,13 @@ STAGE2_RESULT = "stage2b_result.json"
 STAGE3_RESULT = "ticket_verification.json"
 STAGE4_RESULT = "stage4_results.json"
 KNOWN_ISSUES = "known_issues.json"
+# THE INTEGRATION SCOPE FILE. Lists the ONLY integrations this suite is
+# responsible for — the hard-coded / mentioned integrations the script
+# follows. Anything not named here is ignored everywhere: not trigger-
+# tested, not ticket-checked, and never shown in the report, even if it is
+# live in the account and raising its own tickets. Optional: when absent,
+# every live integration is reported (the old, unfiltered behaviour).
+SCOPE_FILE = "scope.json"
 REPORT_DIR = "reports"
 
 PASS = "PASS"
@@ -303,6 +310,58 @@ def load_live_integrations():
     names = [str(i.get("name")) for i in (data.get("integrations") or [])
              if i.get("name")]
     return set(names) if names else None
+
+
+def load_scope():
+    """The integration scope — the ONLY integrations this suite follows.
+
+    Returns a dict with two sets:
+        {"names": {lowercased names/patterns}, "service_ids": {ids}}
+    or None when scope.json is absent (meaning: no filter, report every
+    live integration — the original behaviour).
+
+    This is the single source of truth for "which integrations do we care
+    about". The script fires trigger tests, checks tickets and reports ONLY
+    for these. A new integration someone adds to the automation account —
+    even one that creates its own tickets in ITSM — is deliberately ignored
+    unless it is listed here, because it is not part of what this script is
+    responsible for.
+    """
+    data = load_json(SCOPE_FILE)
+    if not isinstance(data, dict):
+        return None
+    names = {str(n).strip().lower()
+             for n in (data.get("integration_names") or []) if str(n).strip()}
+    sids = {str(s).strip()
+            for s in (data.get("service_ids") or []) if str(s).strip()}
+    if not names and not sids:
+        return None
+    return {"names": names, "service_ids": sids}
+
+
+def _name_in_scope(name, scope_names):
+    """Case-insensitive match of an integration name against the scope list.
+    Supports '*' wildcards so e.g. 'Pager Duty*' matches 'Pager Duty
+    Automation'."""
+    import fnmatch
+    n = str(name or "").strip().lower()
+    if not n:
+        return False
+    for pat in scope_names:
+        if n == pat or fnmatch.fnmatch(n, pat):
+            return True
+    return False
+
+
+def in_scope(name, scope):
+    """True when this integration is one the suite is responsible for.
+
+    When no scope file is configured (scope is None), everything is in
+    scope — the suite reverts to its original unfiltered behaviour.
+    """
+    if scope is None:
+        return True
+    return _name_in_scope(name, scope.get("names") or set())
 
 
 def integration_status(name, recs):
@@ -752,7 +811,7 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
 
 
 def build_findings(stage3, stage4, known, live_recs=None,
-                   trigger_blocked=None):
+                   trigger_blocked=None, scope=None):
     s4_by_integ = {}
     for e in (stage4 or {}).get("results", []):
         s4_by_integ[str(e.get("integration", "")).lower()] = e
@@ -762,6 +821,12 @@ def build_findings(stage3, stage4, known, live_recs=None,
     seen_integrations = set()
     for e in (stage3 or {}).get("results", []):
         integ = e.get("integration", "unknown")
+        # SCOPE GATE: only report integrations this suite is responsible
+        # for. An out-of-scope integration (e.g. one added to the account
+        # that raises its own tickets) is skipped entirely — not trigger-
+        # tested, not ticket-checked, not shown in the report.
+        if not in_scope(integ, scope):
+            continue
         seen_integrations.add(integ)
         s4 = s4_by_integ.get(str(integ).lower())
         # Determine live status: deleted/suspended/active/unknown
@@ -857,6 +922,10 @@ def build_findings(stage3, stage4, known, live_recs=None,
         for rec in live_recs:
             integ = str(rec.get("name") or "")
             if not integ or integ in seen_integrations:
+                continue
+            # SCOPE GATE: a live integration that this suite does NOT follow
+            # must never be surfaced — not even as a "no alert log rows" row.
+            if not in_scope(integ, scope):
                 continue
             note = known_note(integ, known)
             integ_st = integration_status(integ, live_recs)
@@ -1280,6 +1349,14 @@ def write_html(path, ctx):
 
     # ── Trigger Test HTML block ──────────────────────────────────────────────
     trigger_test_results = (ctx.get("trigger_test") or {}).get("results") or []
+    # SCOPE GATE: a stale stage0 result (e.g. in --report-only) may contain
+    # integrations outside the suite's scope. Drop them so the pre-flight
+    # table only shows the integrations this suite is responsible for.
+    _scope_for_tt = ctx.get("scope")
+    if _scope_for_tt is not None and trigger_test_results:
+        trigger_test_results = [
+            r for r in trigger_test_results
+            if in_scope(r.get("name"), _scope_for_tt)]
     if trigger_test_results:
         import stage0_trigger_test as _s0
         trigger_test_html = _s0.trigger_test_html_block(trigger_test_results)
@@ -1294,11 +1371,42 @@ def write_html(path, ctx):
         )
 
     itsm_first_data = ctx["env"].get("itsm_first") or {}
+    # SCOPE GATE for the ITSM-First table. Map each in-scope integration to
+    # the ITSM tool_key that backs it (same resolution stage4 uses), then
+    # show only those tools. A tool that only backs out-of-scope
+    # integrations (e.g. HALO, TOPdesk) is dropped, so tickets those tools
+    # created for integrations we do not follow never appear.
+    _scope_tt = ctx.get("scope")
+    _allowed_tool_keys = None
+    if _scope_tt is not None:
+        try:
+            import stage4_tickets as _s4
+            _tools = _s4.build_tools()
+            _allowed_tool_keys = set()
+            for _rec in (ctx["env"].get("integration_records") or []):
+                _nm = _rec.get("name")
+                if not in_scope(_nm, _scope_tt):
+                    continue
+                _modes = []
+                raw = _rec.get("raw") or {}
+                _t = _s4.pick_tool(_nm, _tools, _modes)
+                if _t is not None:
+                    for _k, _obj in _tools.items():
+                        if _obj is _t:
+                            _allowed_tool_keys.add(_k)
+                            break
+        except Exception:  # noqa: BLE001
+            _allowed_tool_keys = None
     if itsm_first_data:
         rows_if = ""
         for mid, data in itsm_first_data.items():
             for tool_result in (data.get("results") or []):
                 tool_name = tool_result.get("tool", "")
+                tool_key = tool_result.get("tool_key", "")
+                # Drop tools that do not back any in-scope integration.
+                if (_allowed_tool_keys is not None
+                        and tool_key not in _allowed_tool_keys):
+                    continue
                 tickets = tool_result.get("tickets") or []
                 if not tool_result.get("configured"):
                     rows_if += (f'<tr><td>{esc(tool_name)}</td>'
@@ -1622,6 +1730,22 @@ def main():
             argv_s0 = [sys.executable, script("stage0_trigger_test.py")]
             if args.no_alert_logs if hasattr(args, "no_alert_logs") else False:
                 argv_s0.append("--no-alert-logs")
+            # SCOPE GATE for the pre-flight trigger test: fire ONLY for the
+            # integrations this suite is responsible for. A new integration
+            # someone adds to the account is never trigger-tested unless it
+            # is listed in scope.json. Resolve scope patterns against the
+            # live integrations file so wildcards and exact names both work.
+            _scope = load_scope()
+            if _scope is not None:
+                _data = load_json(_integ_file) or {}
+                _scoped_names = [
+                    str(i.get("name"))
+                    for i in (_data.get("integrations") or [])
+                    if i.get("name") and in_scope(i.get("name"), _scope)]
+                if _scoped_names:
+                    argv_s0 += ["--names", ",".join(_scoped_names)]
+                    log(f"  [SCOPE] trigger test limited to "
+                        f"{len(_scoped_names)} in-scope integration(s).")
             s0_result = run_stage(
                 "STAGE 0 — PRE-FLIGHT TRIGGER TEST", argv_s0, args.dry_run)
             stages.append(s0_result)
@@ -2228,8 +2352,36 @@ def main():
         log(f"\n  [OK ] {KNOWN_ISSUES} loaded — {len(known)} triaged issue(s) "
             f"will report as KNOWN, not DEFECT")
 
-    live = load_live_integrations()
-    recs = load_integration_records()
+    scope = load_scope()
+    if scope is not None:
+        in_scope_recs = [r for r in (load_integration_records() or [])
+                         if in_scope(r.get("name"), scope)]
+        log("")
+        log(f"  [SCOPE] {SCOPE_FILE} loaded — the suite follows ONLY these "
+            f"{len(scope.get('names') or [])} integration(s). Any other "
+            f"integration in the account is ignored (not trigger-tested, "
+            f"not ticket-checked, not reported), even if it raises its own "
+            f"tickets:")
+        for nm in sorted(scope.get("names") or []):
+            log(f"      - {nm}")
+    else:
+        log("")
+        log(f"  [SCOPE] no {SCOPE_FILE} found — reporting EVERY live "
+            f"integration (unfiltered). Add {SCOPE_FILE} to restrict the "
+            f"suite to only the integrations it is responsible for.")
+
+    live_all = load_live_integrations()
+    recs_all = load_integration_records()
+    # Apply the scope filter to BOTH the live-name set and the full records,
+    # so every downstream consumer (findings filter, the "configured in this
+    # account" section, and the report's integration table) only ever sees
+    # the integrations this suite is responsible for.
+    if scope is not None:
+        live = ({n for n in live_all if in_scope(n, scope)}
+                if live_all is not None else None)
+        recs = [r for r in (recs_all or []) if in_scope(r.get("name"), scope)]
+    else:
+        live, recs = live_all, recs_all
     section("THIRD-PARTY INTEGRATIONS CONFIGURED IN THIS ACCOUNT")
     if live is None:
         log(f"  [WARN] no {INTEGRATIONS_FILE} — cannot tell which")
@@ -2289,7 +2441,8 @@ def main():
             continue
         for f in build_findings(pm.get("stage3"), pm.get("stage4"), known,
                                   live_recs=recs,
-                                  trigger_blocked=trigger_blocked_integrations):
+                                  trigger_blocked=trigger_blocked_integrations,
+                                  scope=scope):
             # DELETED integrations: they appear in alert log history but
             # no longer exist in integrations.json. Do NOT silently drop
             # them — show them with a clear DELETED headline so the tester
@@ -2393,6 +2546,10 @@ def main():
         # Stage 0 trigger test results — embedded in the report
         "trigger_test": trigger_test_data,
         "trigger_blocked_integrations": sorted(trigger_blocked_integrations),
+        # Integration scope (names/service_ids the suite follows) so the
+        # report writer can filter any stale/out-of-scope rows out of the
+        # pre-flight trigger-test and ITSM-first tables.
+        "scope": scope,
         "env": {"grid": grid,
                 "monitor_id": ", ".join(m["monitor_id"] for m in monitors),
                 "monitor_name": ", ".join(
