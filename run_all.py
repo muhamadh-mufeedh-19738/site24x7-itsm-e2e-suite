@@ -1107,6 +1107,16 @@ h2{font-size:18px;margin:34px 0 12px;padding-bottom:7px;border-bottom:2px solid 
  padding:14px 16px;text-align:center}
 .tile .n{font-size:30px;font-weight:700;line-height:1.1}
 .tile .l{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#57606a;margin-top:3px}
+html{scroll-behavior:smooth}
+a.tile{display:block;color:inherit;text-decoration:none;cursor:pointer;
+ transition:box-shadow .12s,border-color .12s,transform .12s}
+a.tile:hover{border-color:#8c959f;box-shadow:0 2px 8px rgba(0,0,0,.08);transform:translateY(-1px)}
+.tile.zero{opacity:.55}
+.tile .go{font-size:10.5px;color:#0969da;margin-top:4px}
+.evgroup{display:flex;align-items:center;gap:10px;margin:22px 0 10px;scroll-margin-top:12px}
+.evgroup .cnt{color:#57606a;font-size:13px}
+.evgroup .top{margin-left:auto;font-size:12px;color:#0969da;text-decoration:none}
+.evgroup:target{background:#fff8c5;border-radius:8px;padding:6px 10px}
 .pill{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:700;
  letter-spacing:.07em;text-transform:uppercase;color:#fff}
 .PASS{background:#1a7f37}.DEFECT{background:#cf222e}.BLOCKED{background:#9a6700}
@@ -1365,8 +1375,7 @@ def write_html(path, ctx):
 <td style="font-size:12px">{_alertlog_cell(x)}</td>
 <td style="font-size:12px">{_tool_cell(x)}</td></tr>"""
 
-    blocks = ""
-    for x in f:
+    def _evidence_card(x):
         tool_rows = ""
         for t in x["tool_tickets"]:
             state = ("found" if t.get("found") else "NOT FOUND")
@@ -1376,7 +1385,7 @@ def write_html(path, ctx):
         tool_tbl = ("<table><tr><th>ticket</th><th>lookup</th>"
                     "<th>status in tool</th></tr>" + tool_rows + "</table>"
                     if tool_rows else "")
-        blocks += f"""<div class="card b-{x['bucket']}">
+        return f"""<div class="card b-{x['bucket']}">
 <span class="pill {x['bucket']}">{x['bucket']}</span>
 <div class="hd">{esc(x.get('monitor'))} &nbsp;/&nbsp; {esc(x['integration'])} &mdash; {esc(x['headline'])}</div>
 <p class="det">{esc(x['detail'])}</p>
@@ -1389,6 +1398,31 @@ def write_html(path, ctx):
 <tr><th>Verified in tool</th><td>{esc(x['tool'] or 'not checked')}</td></tr>
 <tr><th style="color:#6e7681;font-size:11px">Ticket ID source (DB)</th><td style="font-size:11px;color:#6e7681;font-family:monospace">{db_evidence_html(x.get('webmon_db_evidence', {}))}</td></tr>
 </table>{tool_tbl}</div>"""
+
+    # Evidence grouped by verdict (worst first). Each group has an anchor
+    # (#ev-DEFECT, #ev-BLOCKED, ...) that the Executive summary tiles link
+    # to. Plain HTML links only -- Jenkins' report CSP blocks JavaScript.
+    order = [DEFECT, BLOCKED, INCONCLUSIVE, KNOWN, PASS]
+    order += sorted({x["bucket"] for x in f} - set(order))
+    blocks = ""
+    for bk in order:
+        group = [x for x in f if x["bucket"] == bk]
+        if not group:
+            continue
+        blocks += (f'<div class="evgroup" id="ev-{bk}">'
+                   f'<span class="pill {bk}">{bk}</span>'
+                   f'<span class="cnt">{len(group)} result(s)</span>'
+                   f'<a class="top" href="#summary">&uarr; back to summary</a></div>')
+        blocks += "".join(_evidence_card(x) for x in group)
+
+    def _tile(bucket, label, colour):
+        n = counts.get(bucket, 0)
+        inner = (f'<div class="n" style="color:{colour}">{n}</div>'
+                 f'<div class="l">{label}</div>')
+        if n and any(x["bucket"] == bucket for x in f):
+            return (f'<a class="tile" href="#ev-{bucket}" title="Jump to the '
+                    f'{label} results">{inner}<div class="go">view &darr;</div></a>')
+        return f'<div class="tile zero">{inner}</div>'
 
     fresh_cycle = ctx.get("cycle_this_run")
     restored = cyc.get("restored")
@@ -1631,13 +1665,13 @@ Account: <strong>{esc(os.environ.get('S247_ACCOUNT', '(not set)'))}</strong>
 &nbsp;&middot;&nbsp; User: {esc(os.environ.get('S247_LOGIN_USER', '(not set)'))}<br>
 Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finished'])} &nbsp;&middot;&nbsp; Duration {esc(ctx['duration'])}</p>
 
-<h2>Executive summary</h2>
+<h2 id="summary">Executive summary</h2>
 <div class="tiles">
-<div class="tile"><div class="n" style="color:#1a7f37">{counts.get(PASS,0)}</div><div class="l">Pass</div></div>
-<div class="tile"><div class="n" style="color:#cf222e">{counts.get(DEFECT,0)}</div><div class="l">Defect</div></div>
-<div class="tile"><div class="n" style="color:#9a6700">{counts.get(BLOCKED,0)}</div><div class="l">Blocked</div></div>
-<div class="tile"><div class="n" style="color:#6e7781">{counts.get(KNOWN,0)}</div><div class="l">Known</div></div>
-<div class="tile"><div class="n" style="color:#0969da">{counts.get(INCONCLUSIVE,0)}</div><div class="l">Inconclusive</div></div>
+{_tile(PASS, "Pass", "#1a7f37")}
+{_tile(DEFECT, "Defect", "#cf222e")}
+{_tile(BLOCKED, "Blocked", "#9a6700")}
+{_tile(KNOWN, "Known", "#6e7781")}
+{_tile(INCONCLUSIVE, "Inconclusive", "#0969da")}
 </div>
 {server_banner}
 <div class="card"><p><strong>Build health: <span class="pill {ctx['health']}">{ctx['health']}</span></strong></p>
