@@ -428,13 +428,15 @@ def fire_trigger_test(grid, token, integration, dry_run=False):
             # CSRF/auth-token mismatch: the session cookie was sent without a
             # matching x-zcsrf-token (1102), or the CSRF token itself is stale
             # (1006). Again a harness credential gap — refresh the cookie AND
-            # its paired CSRF token together (python3 extract_cookie.py). Never
+            # its paired CSRF token together (itsm.py --login-only). Never
             # an integration misconfiguration.
             harness_auth_gap = True
             api_msg = (f"CSRF/auth-token mismatch — the session cookie was "
                        f"not accepted because its paired x-zcsrf-token is "
                        f"missing or stale. Re-capture the cookie AND CSRF "
-                       f"together with 'python3 extract_cookie.py'. Harness "
+                       f"together with 'python3 itsm.py -a "
+                       f"{os.environ.get('S247_ACCOUNT') or '<account>'} "
+                       f"--login-only'. Harness "
                        f"access gap, NOT an integration misconfiguration. "
                        f"The lifecycle is NOT blocked. Details: {err_txt}")
         elif http_code == 401:
@@ -447,6 +449,23 @@ def fire_trigger_test(grid, token, integration, dry_run=False):
                        f"(session cookie absent/expired and OAuth token not "
                        f"permitted). Harness access gap, not an integration "
                        f"misconfiguration. Details: {err_txt}")
+        elif (http_code is not None and http_code >= 500
+              and '"error_code"' in err_txt
+              and "<html" not in err_txt.lower()):
+            # The PRODUCT answered with its own JSON error, e.g.
+            #   HTTP 500 {"error_code":1000,"message":"Invalid data provided
+            #   for the resource - /api/integration/.../trigger_test/<id>"}
+            # The grid is up -- Site24x7 parsed the request and rejected it
+            # for THIS integration. Calling that "grid temporarily
+            # unavailable" hid a real problem behind a grey SKIP. It is a
+            # FAIL, with the product's own words as evidence.
+            api_msg = (f"Site24x7 rejected the trigger test for this "
+                       f"integration (HTTP {http_code}). The grid answered, "
+                       f"so this is NOT an outage — the integration's saved "
+                       f"configuration or the product's handler for it is "
+                       f"failing. Open the integration in the Site24x7 UI "
+                       f"and press Trigger Test to confirm. Product "
+                       f"response: {err_txt.strip()[:200]}")
         elif (http_code in (429, 500, 502, 503, 504)
               or "temporarily unavailable" in err_txt.lower()
               or "<!doctype html" in err_txt.lower()
@@ -1218,10 +1237,11 @@ def check_trigger_auth(grid, token):
                            f"the logged-in user is NOT an admin ({detail}). "
                            f"trigger_test needs an ADMIN session (Web_Mon "
                            f"userroles 1|2|3|100), so it will return error "
-                           f"1100 and be reported as SKIP (not FAIL). FIX: log "
-                           f"into Site24x7 as an ADMIN user in Chrome, re-run "
-                           f"'python3 extract_cookie.py', then 'source "
-                           f".session.env'. (Or mint an admin OAuth token with "
+                           f"1100 and be reported as SKIP (not FAIL). FIX: log in "
+                           f"with an ADMIN user (set S247_LOGIN_USER), then "
+                           f"re-run 'python3 itsm.py -a "
+                           f"{os.environ.get('S247_ACCOUNT') or '<account>'} "
+                           f"--login-only'. (Or mint an admin OAuth token with "
                            f"./get_token.sh --authorize.)")
         if state == "unknown":
             return True, (f"Session cookie present ({len(cookie)} chars) — "
@@ -1234,9 +1254,10 @@ def check_trigger_auth(grid, token):
     return False, ("No admin-scoped OAuth token AND no session cookie. "
                    "Fix EITHER (recommended, permanent): mint an admin-scoped "
                    "refresh token with  ./get_token.sh --authorize  then paste "
-                   "it into .token.env; OR (quick, temporary): refresh "
-                   "S247_SESSION_COOKIE from the browser (logged in as an "
-                   "ADMIN) and  source .session.env.")
+                   "it into .token.env; OR (quick): refresh the session "
+                   "cookie as an ADMIN user with  python3 itsm.py -a "
+                   + (os.environ.get("S247_ACCOUNT") or "<account>")
+                   + " --login-only")
 
 
 def write_results(results, grid, started):
@@ -1269,9 +1290,9 @@ def main():
         description="Stage 0 — fire trigger-test for all integrations "
                     "before the alert lifecycle begins")
     ap.add_argument("--integrations-file", default=None,
-                    help="path to integrations.json. Default: auto-detected "
-                         "from accounts/<account>/integrations.json or "
-                         "./integrations.json")
+                    help="path to integrations.json. Default: "
+                         "$S247_INTEGRATIONS_FILE (set by itsm.py), else "
+                         "./integrations.json in the current account folder")
     ap.add_argument("--names", default=None,
                     help="comma-separated integration names to test. "
                          "Default: all integrations in the file.")
@@ -1293,7 +1314,8 @@ def main():
     started = datetime.now(timezone.utc).isoformat()
     grid = os.environ.get("S247_GRID_URL", "").strip()
     if not grid:
-        die("S247_GRID_URL not set. Run:  source start.sh")
+        die("S247_GRID_URL not set. Start through itsm.py, which sets it:\n"
+            "  python3 itsm.py --grid <grid> --account <account>")
 
     section("SITE24X7 ITSM AUTOMATION — STAGE 0 : PRE-FLIGHT TRIGGER TEST")
     log(f"  Grid    : {grid}")
@@ -1303,24 +1325,21 @@ def main():
     log(f"            misconfigured — not a product bug. Fix it first.")
 
     # ── Locate integrations.json ──────────────────────────────────────────
-    integ_file = args.integrations_file
-    if not integ_file:
-        # Auto-detect: look in the CWD first, then in each account subfolder
-        candidates = [
-            INTEGRATIONS_FILE,
-            os.path.join(HERE, "accounts", "automation", "integrations.json"),
-            os.path.join(HERE, "accounts", "tpt", "integrations.json"),
-            os.path.join(HERE, "accounts", "tpt1", "integrations.json"),
-        ]
-        for c in candidates:
-            if os.path.isfile(c):
-                integ_file = c
-                break
+    # Only THIS account's list is ever used: --integrations-file, else the
+    # path itsm.py exported, else integrations.json in the account folder we
+    # are running in. Other accounts' files are NEVER used as a fallback --
+    # that silently trigger-tested the wrong account's integrations.
+    integ_file = (args.integrations_file
+                  or os.environ.get("S247_INTEGRATIONS_FILE")
+                  or os.path.abspath(INTEGRATIONS_FILE))
 
-    if not integ_file or not os.path.isfile(integ_file):
-        die(f"integrations.json not found. Run s247_integrations.js first:\n"
-            f"  node s247_integrations.js\n"
-            f"  (or pass --integrations-file <path>)")
+    if not os.path.isfile(integ_file):
+        acct = os.environ.get("S247_ACCOUNT") or "<account>"
+        die(f"integrations.json not found for account '{acct}'.\n"
+            f"  Expected: {integ_file}\n"
+            f"  Other accounts' lists are deliberately NOT used.\n"
+            f"  Capture this account's list first:\n"
+            f"    python3 itsm.py -a {acct} --integrations")
 
     with open(integ_file, encoding="utf-8") as fh:
         integ_data = json.load(fh)

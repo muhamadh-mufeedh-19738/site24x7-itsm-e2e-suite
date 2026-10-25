@@ -81,18 +81,30 @@ TEMPLATE = """# Account settings for '{name}'.
 # Paths may use ~ and are resolved from your home folder.
 # Single quotes around anything containing $ ! # or a backtick.
 
-# The Site24x7 grid this account lives on
+# The Site24x7 grid this account lives on. itsm.py always replaces this
+# with the grid you pick, so it only matters for scripts run on their own.
 export S247_GRID_URL="{grid_url}"
 
-# The script that mints an OAuth token, and the secrets file it reads
-export S247_TOKEN_SCRIPT="$HOME/Documents/qg/get_token.sh"
-export TOKEN_ENV_FILE="$HOME/Documents/qg/.token.{name}.env"
+# The script that mints an OAuth token, and the secrets file it reads.
+# Both live in the suite folder (the same layout Jenkins uses).
+export S247_TOKEN_SCRIPT="{token_script}"
+export TOKEN_ENV_FILE="{token_file}"
 
-# The Site24x7 login used by the headless Chrome profile.
-# Each account gets its OWN profile, so the two logins never collide.
+# Which browser the headless login uses. 'chromium' is the browser that
+# Playwright downloads itself (the same one Jenkins uses). Change it to
+# 'chrome' only if you need your installed Google Chrome instead.
+export S247_BROWSER_CHANNEL="chromium"
+
+# The Site24x7 login used by the headless browser profile.
+# Each account gets its OWN profile, so the logins never collide.
 export S247_LOGIN_USER=''
 export S247_LOGIN_PASS=''
 """
+
+# Blank templates copied in by --init when a secrets file is missing.
+# A file that already exists is NEVER overwritten.
+ITSM_SAMPLE = os.path.join(HERE, ".itsm.env.sample")
+TOKEN_SAMPLE = os.path.join(HERE, ".token.env.sample")
 
 
 def log(m=""):
@@ -151,7 +163,10 @@ def cmd_init(name, grid_url):
     os.makedirs(os.path.join(d, "reports"), exist_ok=True)
 
     with open(os.path.join(d, "account.env"), "w", encoding="utf-8") as fh:
-        fh.write(TEMPLATE.format(name=name, grid_url=grid_url))
+        fh.write(TEMPLATE.format(
+            name=name, grid_url=grid_url,
+            token_script=os.path.join(HERE, "get_token.sh"),
+            token_file=os.path.join(HERE, f".token.{name}.env")))
     os.chmod(os.path.join(d, "account.env"), 0o600)
 
     # Offer to seed the account with whatever is in the project root today,
@@ -181,6 +196,85 @@ def cmd_init(name, grid_url):
     log(f"    nano {os.path.join(d, '.itsm.env')}")
     log("      - this account's ServiceNow / Desk / SDP / HALO credentials")
     log(f"\n  Then:  python3 itsm.py --grid <grid> --account {name} --check")
+
+
+def _copy_if_missing(src, dst, made, kept, missing_src):
+    """Copy a blank template to dst ONLY when dst does not exist yet.
+    Never overwrites a file you have already filled in. chmod 600."""
+    if os.path.exists(dst):
+        kept.append(dst)
+        return
+    if not os.path.isfile(src):
+        missing_src.append(src)
+        return
+    shutil.copyfile(src, dst)
+    os.chmod(dst, 0o600)
+    made.append(dst)
+
+
+def cmd_local_setup(name, grid_url):
+    """Prepare THIS machine to run an account that already exists in the
+    repo (accounts/<name>/ with allowlist.json etc.). Creates the three
+    secret files from blank templates if they are missing. Never overwrites,
+    never asks for or prints a secret. The files are git-ignored."""
+    d = os.path.join(ACCOUNTS, name)
+    if not os.path.isdir(d):
+        die(f"accounts/{name} does not exist. Known accounts: "
+            f"{', '.join(sorted(n for n in os.listdir(ACCOUNTS) if os.path.isdir(os.path.join(ACCOUNTS, n)))) or 'none'}. "
+            f"For a brand-new account use:  python3 itsm.py --init {name}")
+    os.makedirs(os.path.join(d, "reports"), exist_ok=True)
+
+    token_file = os.path.join(HERE, f".token.{name}.env")
+    acct_env = os.path.join(d, "account.env")
+    itsm_env = os.path.join(d, ".itsm.env")
+    made, kept, missing_src = [], [], []
+
+    if os.path.exists(acct_env):
+        kept.append(acct_env)
+    else:
+        with open(acct_env, "w", encoding="utf-8") as fh:
+            fh.write(TEMPLATE.format(
+                name=name, grid_url=grid_url,
+                token_script=os.path.join(HERE, "get_token.sh"),
+                token_file=token_file))
+        os.chmod(acct_env, 0o600)
+        made.append(acct_env)
+
+    _copy_if_missing(ITSM_SAMPLE, itsm_env, made, kept, missing_src)
+    _copy_if_missing(TOKEN_SAMPLE, token_file, made, kept, missing_src)
+
+    section(f"LOCAL SETUP — account '{name}'")
+    for p in made:
+        log(f"  [new ] {os.path.relpath(p, HERE)}   (blank template, chmod 600)")
+    for p in kept:
+        log(f"  [kept] {os.path.relpath(p, HERE)}   (already existed — NOT touched)")
+    for p in missing_src:
+        log(f"  [!!  ] template {os.path.relpath(p, HERE)} is missing — "
+            f"could not create its file")
+
+    # Loud check: every secret file must be git-ignored, or we stop.
+    leaked = []
+    for p in made + kept:
+        r = subprocess.run(["git", "check-ignore", "-q", p], cwd=HERE,
+                           capture_output=True)
+        if r.returncode == 1:
+            leaked.append(p)
+    if leaked:
+        for p in leaked:
+            log(f"  [!!  ] {os.path.relpath(p, HERE)} is NOT git-ignored!")
+        die("a secrets file could be committed to GitHub. Fix .gitignore "
+            "before filling anything in.")
+    log("  [ok  ] all three files are git-ignored (they can never be pushed)")
+
+    log("\n  NEXT — fill them in with nano (one at a time):")
+    log(f"    nano {os.path.relpath(acct_env, HERE)}      "
+        f"-> S247_LOGIN_USER / S247_LOGIN_PASS")
+    log(f"    nano {os.path.relpath(itsm_env, HERE)}       "
+        f"-> ServiceNow / Desk / SDP / HALO / PagerDuty / TOPdesk")
+    log(f"    nano {os.path.relpath(token_file, HERE)}  "
+        f"-> client_id / client_secret / refresh_token")
+    if missing_src:
+        sys.exit(2)
 
 
 GRIDS_FILE = os.path.join(HERE, "grids.json")
@@ -317,6 +411,10 @@ def main():
                          "Asked interactively when not given.")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--init", metavar="NAME", default=None)
+    ap.add_argument("--local-setup", metavar="NAME", default=None,
+                    help="prepare THIS machine for an existing account: "
+                         "creates blank account.env / .itsm.env / "
+                         ".token.<name>.env if missing (never overwrites)")
     ap.add_argument("--check", action="store_true",
                     help="run preflight only, change nothing")
     ap.add_argument("--tools", action="store_true",
@@ -344,6 +442,14 @@ def main():
     ap.add_argument("--no-login", action="store_true",
                     help="skip the cookie refresh (use the saved one)")
     args, passthrough = ap.parse_known_args()
+
+    if args.local_setup:
+        grids = load_grids()
+        gname = args.grid or next(iter(grids))
+        if gname not in grids:
+            die(f"no such grid {gname!r}. Known: {', '.join(grids)}")
+        cmd_local_setup(args.local_setup, grids[gname]["url"])
+        return
 
     if args.init:
         grids = load_grids()
@@ -550,6 +656,13 @@ def main():
                     log("         may appear.")
 
     # ---- the suite ------------------------------------------------------
+    # Hand run_all.py the EXACT paths it needs, so it never has to guess:
+    #   S247_LOGIN_JS          -> mid-run re-login after someone logs out
+    #   S247_INTEGRATIONS_FILE -> THIS account's list for the Stage 0 test
+    #   S247_NO_AUTO_OPEN      -> itsm.py opens the report once, at the end
+    env["S247_LOGIN_JS"] = os.path.abspath(LOGIN_JS)
+    env["S247_INTEGRATIONS_FILE"] = os.path.join(d, "integrations.json")
+    env["S247_NO_AUTO_OPEN"] = "1"
     section(f"RUNNING THE SUITE — {name}")
     rc = run([sys.executable, os.path.join(HERE, "run_all.py")] + passthrough,
              env, d, "run_all.py")
@@ -566,14 +679,21 @@ def main():
         log(f"  │  Ctrl+Click to open in browser:                           │")
         log(f"  │  {latest_uri}")
         log(f"  └───────────────────────────────────────────────────────────┘")
-        # Auto-open the report in the default browser
-        try:
-            import subprocess as _sp
-            _sp.Popen(["xdg-open", latest_abs],
-                      stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-            log(f"\n  ✅  Report auto-opened in your browser.")
-        except Exception:
-            log(f"\n  (Could not auto-open — Ctrl+Click the link above.)")
+        # Auto-open the report in the default browser. macOS uses 'open',
+        # Linux desktops use 'xdg-open'. The Jenkins server has neither a
+        # desktop nor a browser, so we say so instead of claiming success.
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        if shutil.which(opener):
+            try:
+                subprocess.Popen([opener, latest_abs],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                log(f"\n  ✅  Report auto-opened in your browser.")
+            except OSError as exc:
+                log(f"\n  (Could not auto-open: {exc} — open the link above.)")
+        else:
+            log(f"\n  (No '{opener}' command on this machine — open the "
+                f"link above.)")
     except (OSError, ValueError):
         pass
     log(f"  exit code {rc}  (0 = build OK, 1 = defect, 2 = blocked)")

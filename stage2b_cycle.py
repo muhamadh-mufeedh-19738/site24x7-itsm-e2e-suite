@@ -335,7 +335,20 @@ def all_statuses(grid, token):
     """One call, every monitor's status. {monitor_id: code}"""
     code, payload = api(grid, "/api/current_status", token)
     out = {}
-    if not payload:
+    if code != 200 or not payload:
+        # Say it out loud. A failed status read looks exactly like "the
+        # monitor is not UP yet", so without this line a grid outage or an
+        # expired token is mistaken for a monitor that refuses to recover.
+        detail = ""
+        if isinstance(payload, dict):
+            detail = str(payload.get("message") or payload.get("_raw")
+                         or payload)[:160]
+        log(f"          [!! ] could not read monitor status: "
+            f"/api/current_status returned HTTP {code}"
+            + (f" — {detail}" if detail else ""))
+        result.setdefault("status_read_errors", []).append(
+            {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "http": code, "detail": detail})
         return out
     blob = payload.get("data", {}) if isinstance(payload, dict) else {}
     buckets = list(blob.get("monitors") or [])
@@ -367,7 +380,11 @@ def wait_for_targets(grid, token, targets, max_wait, poll_every=20):
         line, done = [], True
         for mid, (want, name) in targets.items():
             st = snap.get(str(mid))
-            last[mid] = STATUS.get(st, str(st))
+            # None means the status could not be read at all (request failed
+            # or the monitor is missing from /api/current_status). Show that
+            # plainly instead of the confusing word "None".
+            last[mid] = ("UNREADABLE" if st is None
+                         else STATUS.get(st, str(st)))
             hit = (st == want)
             done = done and hit
             line.append(f"{name}={last[mid]}{'' if hit else ' (waiting)'}")
@@ -946,6 +963,10 @@ def main():
 
     except Exception as exc:  # noqa: BLE001
         log(f"\n  [!!] Error during cycle: {exc}")
+        # Keep the exact reason in the result file. Without it, run_all.py
+        # can only guess why the cycle stopped -- and a guess like "dead
+        # session cookie" sends the tester chasing the wrong problem.
+        result["error"] = str(exc)
 
     finally:
         # ---- RESTORE : always, for every monitor -------------------------

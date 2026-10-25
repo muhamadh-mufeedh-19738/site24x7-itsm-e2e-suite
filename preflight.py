@@ -18,10 +18,10 @@ It changes NOTHING. No PUTs, no monitor edits, no writes except an
 allowlist file you explicitly ask for with --write-allowlist.
 
 USAGE
-    source start.sh
-    python3 preflight.py
+    python3 itsm.py -g <grid> -a <account> --check
 
-    # build a starter allowlist from a name pattern (case-insensitive)
+    # build a starter allowlist from a name pattern (case-insensitive),
+    # run from inside accounts/<account>/ after itsm.py has set the env
     python3 preflight.py --write-allowlist "AUTOMATION*"
 
 EXIT CODES
@@ -78,6 +78,18 @@ def bad(name, detail="", fatal=True):
     (problems if fatal else warnings_).append(f"{name}: {detail}")
 
 
+def _acct():
+    """The account itsm.py chose (never hard-coded)."""
+    return os.environ.get("S247_ACCOUNT") or "<account>"
+
+
+def _login_cmd():
+    """The one command that refreshes this account's session cookie."""
+    grid = os.environ.get("S247_GRID_NAME")
+    return (f"python3 itsm.py -a {_acct()}" + (f" -g {grid}" if grid else "")
+            + " --login-only")
+
+
 def get_token():
     script = os.environ.get("S247_TOKEN_SCRIPT", "").strip()
     if not script or not os.path.isfile(script):
@@ -88,8 +100,8 @@ def get_token():
         log(f"  token env file : {env_file}")
         if not os.path.isfile(env_file):
             return None, (f"TOKEN_ENV_FILE points at {env_file} which does "
-                          f"not exist. Wrong account file, or a typo in "
-                          f"env.big.sh.")
+                          f"not exist. Check TOKEN_ENV_FILE in "
+                          f"accounts/{_acct()}/account.env.")
     else:
         log("  token env file : (not set - the token script will use its "
             "own default, which is the OLD account)")
@@ -244,7 +256,9 @@ def main():
 
     grid = os.environ.get("S247_GRID_URL", "").strip()
     if not grid:
-        bad("S247_GRID_URL not set", "run: source start.sh")
+        bad("S247_GRID_URL not set",
+            "start through itsm.py:  python3 itsm.py -g <grid> -a <account> "
+            "--check")
         log("\n  Nothing else can be checked without it.")
         sys.exit(2)
     ok("grid", grid)
@@ -257,8 +271,9 @@ def main():
     ok("OAuth token", f"obtained, {len(token)} chars")
     if not os.environ.get("TOKEN_ENV_FILE"):
         bad("TOKEN_ENV_FILE is not set",
-            "you are on the OLD account. For the new account run: "
-            "source env.big.sh   (never start.sh)")
+            f"the token script will fall back to its own default account. "
+            f"Add  export TOKEN_ENV_FILE=...  to "
+            f"accounts/{_acct()}/account.env")
 
     # ---- 1. account identity + blast radius ------------------------------
     section("1. ACCOUNT AND BLAST RADIUS")
@@ -422,12 +437,11 @@ def main():
         ok("session cookie present in the environment")
         log("      Cookies are per-account. If you just switched accounts, "
             "refresh it:")
-        log("        python3 extract_cookie.py   (while logged into THIS "
-            "account)")
+        log(f"        {_login_cmd()}")
     else:
         bad("no session cookie in the environment",
-            "stage 3 (Alert Logs) will fail. Run: python3 extract_cookie.py "
-            "then source .session.env", fatal=False)
+            f"stage 3 (Alert Logs) will fail. Run: {_login_cmd()}",
+            fatal=False)
     log("\n  For the full credential picture: python3 check_session.py")
 
     # ---- verdict ---------------------------------------------------------

@@ -34,13 +34,14 @@ THE IMPORTANT PART — PASS vs FAIL vs BLOCKED
     build red and send somebody chasing a bug that does not exist.
 
 USAGE
-    cd ~/itsm-automation
-    source start.sh
+    Always start through itsm.py -- it picks the grid and account, sets
+    every environment variable and refreshes the login cookie first.
+    Extra flags are passed straight through to this script:
 
-    python3 run_all.py                     # full run, all three stages
-    python3 run_all.py --skip-cycle        # reuse the last alert cycle
-    python3 run_all.py --report-only       # just rebuild the report
-    python3 run_all.py --dry-run           # show the plan, change nothing
+    python3 itsm.py -g <grid> -a <account>                # full run
+    python3 itsm.py -g <grid> -a <account> --skip-cycle   # reuse last cycle
+    python3 itsm.py -g <grid> -a <account> --report-only  # rebuild report
+    python3 itsm.py -g <grid> -a <account> --dry-run      # plan only
 
 OPTIONAL: known_issues.json
     Put this next to the script to stop already-triaged problems from
@@ -138,10 +139,49 @@ def run_stage(label, argv, dry_run=False):
     return {"label": label, "cmd": argv, "returncode": rc, "seconds": secs}
 
 
-LOGIN_JS = os.environ.get(
-    "S247_LOGIN_JS",
-    os.path.join(os.path.expanduser("~"), "Documents", "qg",
-                 "s247_login.js"))
+# s247_login.js lives in the SAME folder as this script (itsm.py passes the
+# exact path in S247_LOGIN_JS). The old default pointed at ~/Documents/qg/,
+# which does not exist on the Jenkins server and is not where the suite
+# keeps it on the laptop either -- so auto re-login could never work.
+LOGIN_JS = os.environ.get("S247_LOGIN_JS") or os.path.join(HERE,
+                                                            "s247_login.js")
+
+
+def relogin_cmd(extra=""):
+    """The exact command a human should run to refresh this account's
+    cookie. Built from the account/grid itsm.py chose -- never hard-coded."""
+    acct = os.environ.get("S247_ACCOUNT") or "<account>"
+    grid = os.environ.get("S247_GRID_NAME")
+    cmd = f"python3 itsm.py -a {acct}" + (f" -g {grid}" if grid else "")
+    return cmd + (f" {extra}" if extra else "")
+
+
+def open_in_browser(path):
+    """Open a file in the default browser, on Mac, Linux or Windows.
+
+    Returns True only if an opener was actually started. On a server with
+    no desktop (Jenkins) there is no opener, and we say so plainly instead
+    of pretending the report was opened.
+    """
+    import shutil
+    if sys.platform == "darwin":
+        opener = ["open"]                    # macOS
+    elif sys.platform.startswith("win"):
+        try:
+            os.startfile(path)               # noqa: S606 (Windows only)
+            return True
+        except OSError:
+            return False
+    else:
+        opener = ["xdg-open"]                # Linux desktop
+    if not shutil.which(opener[0]):
+        return False
+    try:
+        subprocess.Popen(opener + [path], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
 
 
 def reload_session():
@@ -153,23 +193,31 @@ def reload_session():
     else's logout is unacceptable, so recover instead of reporting it.
     """
     if not os.path.isfile(LOGIN_JS):
-        log(f"  [!! ] cannot auto-recover: {LOGIN_JS} not found")
+        log(f"  [!! ] cannot auto-recover: {LOGIN_JS} not found.")
+        log("        s247_login.js must sit next to run_all.py, or")
+        log("        S247_LOGIN_JS must point at it.")
         return False
-    log("  Re-minting the session cookie...")
+    log(f"  Re-minting the session cookie with {LOGIN_JS} ...")
     try:
         r = subprocess.run(["node", LOGIN_JS], capture_output=True, text=True,
-                           timeout=300)
+                           timeout=300, stdin=subprocess.DEVNULL)
     except Exception as exc:  # noqa: BLE001
         log(f"  [!! ] login script failed: {exc}")
         return False
     if r.returncode != 0:
-        log("  [!! ] could not log back in automatically.")
+        log(f"  [!! ] could not log back in automatically "
+            f"(s247_login.js exit {r.returncode}).")
+        tail = ((r.stdout or "") + (r.stderr or "")).strip()[-400:]
+        if tail:
+            log("        login script said: " + tail.replace("\n", " | "))
         log("        Somebody may have logged the account out. Run:")
-        log(f"          node {LOGIN_JS} --setup")
+        log(f"          {relogin_cmd('--login-only')}")
         return False
 
     path = os.environ.get("S247_SESSION_FILE", ".session.env")
     if not os.path.isfile(path):
+        log(f"  [!! ] login succeeded but the cookie file {path} was not "
+            f"written.")
         return False
     n = 0
     with open(path, encoding="utf-8") as fh:
@@ -197,6 +245,55 @@ def load_json(path):
     except Exception as exc:  # noqa: BLE001
         log(f"  [WARN] could not read {path}: {exc}")
         return None
+
+
+def cycle_not_driven_reason(cycle):
+    """Return a plain-English reason if the alert cycle never put ANY
+    monitor into a problem state (so no alert fired and no ticket can
+    exist), otherwise None.
+
+    Built only from what stage2b actually recorded -- verdict, error,
+    phase-0 statuses and any failed status reads -- so the report states
+    the real cause instead of guessing "dead session cookie".
+    """
+    if not isinstance(cycle, dict):
+        return None
+    verdict = str(cycle.get("verdict") or "")
+    transitions = cycle.get("transitions")
+    problem_moves = [t for t in (transitions or [])
+                     if str(t.get("state") or "").lower() != "up"]
+    if verdict == "PASS" or problem_moves:
+        return None
+    # An old stage2b result has no "transitions" key at all; only trust an
+    # explicit BLOCKED verdict in that case.
+    if transitions is None and not verdict.startswith("BLOCKED"):
+        return None
+
+    parts = [f"The alert cycle ended with verdict {verdict or 'UNKNOWN'} and "
+             f"no monitor ever reached DOWN or TROUBLE, so no alert fired "
+             f"and no ticket could be created"]
+    phase0 = (cycle.get("phases") or {}).get("0_all_up") or {}
+    status = phase0.get("status") or {}
+    if status:
+        names = {str(m.get("monitor_id")): (m.get("name") or m.get("monitor_id"))
+                 for m in (cycle.get("monitors") or [])}
+        seen = ", ".join(f"{names.get(str(k), k)}={v}"
+                         for k, v in status.items())
+        parts.append(f"Monitor status at the end of the 'all UP' wait "
+                     f"({phase0.get('secs')}s): {seen}")
+    errs = cycle.get("status_read_errors") or []
+    if errs:
+        codes = sorted({str(e.get("http")) for e in errs})
+        parts.append(f"{len(errs)} monitor-status read(s) FAILED (HTTP "
+                     f"{', '.join(codes)}) — the grid or the OAuth token was "
+                     f"not answering, which usually means the grid was "
+                     f"restarting or unhealthy")
+    if cycle.get("error"):
+        parts.append(f"Stage 2b stopped with: {cycle['error']}")
+    parts.append("This is NOT an integration defect and NOT a session-cookie "
+                 "problem. Check the monitors are UP in the Site24x7 UI and "
+                 "the grid is healthy, then re-run")
+    return ". ".join(p.rstrip(".") for p in parts) + "."
 
 
 def file_age_minutes(path):
@@ -229,10 +326,17 @@ APP_IDS = {
     "20": "Zoho Desk",
     "43": "HaloITSM",
     "1": "PagerDuty",
-    # TOPdesk's numeric id as reported by this account's Integrations page.
-    # If your grid reports a different id, drop a third_party_apps.json next to
-    # the account data to override, e.g. { "<id>": "TOPdesk" }.
-    "48": "TOPdesk",
+    # The ids below come from the product's own source, not guesses:
+    #   Web_Mon  ThirdPartyServices.java  (SLACK 5, ZCLIQ 18, TELEGRAM 21,
+    #                                      DISCORD 26)
+    #   s247_Integrations ServiceType.java (TOPDESK = 45)
+    # The old entry "48": "TOPdesk" was wrong -- the account reports TOPdesk
+    # as 45, which is why reports showed "app id 45 (name unknown)".
+    "45": "TOPdesk",
+    "5": "Slack",
+    "18": "Zoho Cliq",
+    "21": "Telegram",
+    "26": "Discord",
 }
 
 
@@ -1293,6 +1397,25 @@ def write_html(path, ctx):
     if cyc:
         per_mon = ""
         for mid, d in (cyc.get("restore_detail") or {}).items():
+            if not isinstance(d, dict):
+                continue
+            # "post_restore_all_up" is NOT a monitor -- it is the final
+            # "are they all UP again?" check. It used to be printed as if it
+            # were a monitor, giving the meaningless row
+            # "post_restore_all_up NOT CONFIRMED — keyword now (original )".
+            if mid == "post_restore_all_up":
+                st = d.get("status") or {}
+                names = {str(m.get("monitor_id")): m.get("name")
+                         for m in (cyc.get("monitors") or [])}
+                seen = ", ".join(f"{names.get(str(k)) or k}={v}"
+                                 for k, v in st.items()) or "no status read"
+                per_mon += (f'<tr><th>All monitors UP after restore</th>'
+                            f'<td class="mono"><span class='
+                            f'"{"ok" if d.get("ok") else "bad"}">'
+                            f'{"yes" if d.get("ok") else "NOT CONFIRMED"}'
+                            f'</span> &mdash; {esc(seen)} '
+                            f'(waited {esc(d.get("secs"))}s)</td></tr>')
+                continue
             okk = d.get("restored") and d.get("verified")
             per_mon += (f'<tr><th>{esc(d.get("name") or mid)}</th>'
                         f'<td class="mono"><span class="{"ok" if okk else "bad"}">'
@@ -1370,7 +1493,11 @@ def write_html(path, ctx):
             '</div>'
         )
 
-    itsm_first_data = ctx["env"].get("itsm_first") or {}
+    # The results are stored at the TOP level of ctx (ctx["itsm_first"]).
+    # This used to read ctx["env"]["itsm_first"], which never exists, so the
+    # table was always replaced by "did not run" -- even on good runs.
+    itsm_first_data = (ctx.get("itsm_first")
+                       or ctx["env"].get("itsm_first") or {})
     # SCOPE GATE for the ITSM-First table. Map each in-scope integration to
     # the ITSM tool_key that backs it (same resolution stage4 uses), then
     # show only those tools. A tool that only backs out-of-scope
@@ -1421,20 +1548,33 @@ def write_html(path, ctx):
                     continue
                 for t in tickets:
                     anc = t.get("anchor")
-                    anc_text = (f'{anc["from"]}&rarr;{anc["to"]} at '
-                                f'{esc(anc["change_at_raw"])}, '
-                                f'+{anc["lag_seconds"]:.0f}s'
-                                if anc else "no anchor")
+                    # This table was never rendered before (see the ctx fix
+                    # above), so read every field defensively -- one odd
+                    # ticket must not crash the whole report.
+                    if isinstance(anc, dict):
+                        try:
+                            lag = f'+{float(anc.get("lag_seconds")):.0f}s'
+                        except (TypeError, ValueError):
+                            lag = ""
+                        anc_text = (f'{esc(anc.get("from"))}&rarr;'
+                                    f'{esc(anc.get("to"))} at '
+                                    f'{esc(anc.get("change_at_raw"))}'
+                                    + (f', {lag}' if lag else ""))
+                    else:
+                        anc_text = "no anchor"
                     rows_if += (f'<tr><td>{esc(tool_name)}</td>'
-                                f'<td class="tid">{esc(t["ticket_id"])}</td>'
+                                f'<td class="tid">{esc(t.get("ticket_id"))}</td>'
                                 f'<td>{esc(t.get("status",""))}</td>'
                                 f'<td>{anc_text}</td></tr>')
         itsm_first_html = (
             f'<table><tr><th>Tool</th><th>Ticket</th><th>Status</th>'
             f'<th>Anchored to state change</th></tr>{rows_if}</table>')
     else:
-        itsm_first_html = ('<p class="note">ITSM-first verification did not '
-                           'run for this report.</p>')
+        itsm_first_html = ('<p class="note">'
+                           + esc(ctx.get("itsm_first_note")
+                                 or "ITSM-first verification did not run "
+                                    "for this report.")
+                           + '</p>')
 
     defects = [x for x in f if x["bucket"] == DEFECT]
     if defects:
@@ -1690,8 +1830,9 @@ def main():
            if args.report_only else
            ("stage3 + stage4" if args.skip_cycle else "stage2b + stage3 + stage4")))
     if grid.startswith("("):
-        log("\n  [BLOCKER] S247_GRID_URL is not set in this terminal.")
-        log("            Run:  source start.sh")
+        log("\n  [BLOCKER] S247_GRID_URL is not set.")
+        log("            Start the suite through itsm.py, which sets it:")
+        log("              python3 itsm.py --grid <grid> --account <account>")
         sys.exit(2)
 
     stages = []
@@ -1716,18 +1857,20 @@ def main():
         log("  they are correctly configured BEFORE touching any monitor.")
         log("  A FAIL here means misconfiguration — not a product bug.")
 
-        # Locate the integrations file (same lookup order as stage0 itself)
-        _integ_files = [
-            INTEGRATIONS_FILE,
-            os.path.join(HERE, "accounts", "automation", "integrations.json"),
-            os.path.join(HERE, "accounts", "tpt", "integrations.json"),
-            os.path.join(HERE, "accounts", "tpt1", "integrations.json"),
-        ]
-        _integ_file = next((f for f in _integ_files if os.path.isfile(f)),
-                           None)
+        # Locate THIS account's integrations file -- and only this account's.
+        # itsm.py captures it into accounts/<account>/integrations.json and
+        # tells us the exact path. We used to fall back to a fixed list of
+        # OTHER accounts' files, which could silently trigger-test the wrong
+        # account's integrations. Never again: this account or nothing.
+        _integ_file = (os.environ.get("S247_INTEGRATIONS_FILE")
+                       or os.path.abspath(INTEGRATIONS_FILE))
+        if not os.path.isfile(_integ_file):
+            _integ_file = None
 
         if _integ_file:
-            argv_s0 = [sys.executable, script("stage0_trigger_test.py")]
+            log(f"  integrations file: {_integ_file}")
+            argv_s0 = [sys.executable, script("stage0_trigger_test.py"),
+                       "--integrations-file", _integ_file]
             if args.no_alert_logs if hasattr(args, "no_alert_logs") else False:
                 argv_s0.append("--no-alert-logs")
             # SCOPE GATE for the pre-flight trigger test: fire ONLY for the
@@ -1792,9 +1935,23 @@ def main():
                 log("\n  ✅ All integrations passed the pre-flight trigger test.")
                 log("  Proceeding to the alert lifecycle.")
         else:
-            log(f"\n  [WARN] No integrations.json found — skipping pre-flight")
-            log("         trigger test. Run s247_integrations.js to capture")
-            log("         the integration list and enable this check.")
+            _acct = os.environ.get("S247_ACCOUNT") or "(unknown account)"
+            _expected = (os.environ.get("S247_INTEGRATIONS_FILE")
+                         or os.path.abspath(INTEGRATIONS_FILE))
+            log("")
+            log("  " + "!" * 66)
+            log(f"  [!! ] STAGE 0 NOT RUN — no integration list for account "
+                f"'{_acct}'.")
+            log(f"        Expected: {_expected}")
+            log("        Integrations were NOT pre-flight checked this run.")
+            log("        Other accounts' lists are deliberately NOT used.")
+            log("        Capture this account's list, then re-run:")
+            log(f"          {relogin_cmd('--integrations')}")
+            log("  " + "!" * 66)
+            stages.append({"label": "STAGE 0 — PRE-FLIGHT TRIGGER TEST",
+                           "cmd": [], "returncode": None, "skipped": True,
+                           "error": f"integrations.json missing for account "
+                                    f"'{_acct}' ({_expected})"})
     elif args.report_only:
         # For report-only, load the previous trigger test result if available.
         # Same rule: only a genuine FAIL blocks; a SKIP (harness auth gap)
@@ -1847,6 +2004,22 @@ def main():
                     f"{cycle.get('derived_keyword')!r}")
             if cv == "FAIL_UNSAFE":
                 log("  !! The monitor may NOT be restored. Check it by hand.")
+
+    # If the cycle never drove ANY monitor into a problem state, no alert
+    # fired and no ticket can exist. Searching the tools and the Alert Logs
+    # would take ~15 minutes and then wrongly blame a "dead session cookie".
+    # Stop here and report the REAL reason instead.
+    cycle_block_reason = None
+    if cycle and not args.report_only and not args.skip_cycle:
+        cycle_block_reason = cycle_not_driven_reason(cycle)
+        if cycle_block_reason:
+            section("ALERT CYCLE NEVER STARTED — NOTHING TO VERIFY")
+            for line in cycle_block_reason.split(". "):
+                if line.strip():
+                    log(f"  {line.strip().rstrip('.')}.")
+            log("")
+            log("  Stages 3 and 4 are SKIPPED: no alert fired, so there are")
+            log("  no tickets to look for. The report will say exactly this.")
 
     # Which monitors to verify -- read back from stage2b, never hard-coded.
     monitors = []
@@ -1935,7 +2108,7 @@ def main():
     # Ticket creation lags the alert by 30-120 seconds. Verifying the
     # instant the cycle ends finds nothing and reports a false failure.
     if (not args.report_only and not args.dry_run and not args.skip_cycle
-            and args.settle > 0):
+            and args.settle > 0 and not cycle_block_reason):
         section("WAITING FOR TICKET DELIVERY TO SETTLE")
         log(f"  Ticket creation lags the alert by roughly 30-120s in these")
         log(f"  tools. Waiting {args.settle}s before verifying, so a slow")
@@ -1955,7 +2128,8 @@ def main():
         "s247_logreport.js")
 
     if (not args.report_only and not args.dry_run
-            and not args.no_logreport and monitors):
+            and not args.no_logreport and monitors
+            and not cycle_block_reason):
         if os.path.isfile(LOGREPORT_JS):
             section("STEP 1 — LOG REPORT: WHEN DID EACH MONITOR CHANGE?")
             env2 = dict(os.environ)
@@ -1982,7 +2156,17 @@ def main():
     # an alert log row is a historical receipt that can contain entries
     # from runs a week ago.
     itsm_first_results = {}
-    if not args.report_only and not args.dry_run and monitors:
+    # Why the ITSM-first table may be empty -- shown in the report instead
+    # of the old unexplained "did not run for this report".
+    itsm_first_note = None
+    if cycle_block_reason:
+        itsm_first_note = ("Skipped: the alert cycle never put a monitor "
+                           "into DOWN or TROUBLE, so there were no tickets "
+                           "to search for.")
+    elif args.report_only:
+        itsm_first_note = "Skipped: --report-only re-uses earlier results."
+    if (not args.report_only and not args.dry_run and monitors
+            and not cycle_block_reason):
         section("ITSM-FIRST — SEARCHING EACH TOOL DIRECTLY")
         log("  Going to each ITSM tool and asking: what tickets were")
         log("  created in the last few minutes for these monitors?")
@@ -2011,13 +2195,28 @@ def main():
             anchor_file = f"logreport_{mid}.json"
             if os.path.isfile(anchor_file):
                 argv += ["--logreport", anchor_file]
+            itsm_file = "itsm_first_results.json"
+            before = (os.path.getmtime(itsm_file)
+                      if os.path.isfile(itsm_file) else None)
             st_itsm = run_stage(
                 f"ITSM-FIRST — {label}", argv, args.dry_run)
             stages.append(st_itsm)
 
-            itsm_file = "itsm_first_results.json"
-            if os.path.isfile(itsm_file):
+            after = (os.path.getmtime(itsm_file)
+                     if os.path.isfile(itsm_file) else None)
+            # Only use the file if THIS search wrote it. An unchanged file
+            # belongs to an earlier run and must never be shown as today's
+            # evidence.
+            if after is not None and after != before:
                 itsm_first_results[mid] = load_json(itsm_file)
+            else:
+                log(f"  [!! ] ITSM-first search for {label} wrote no new "
+                    f"results (exit {st_itsm.get('returncode')}). Nothing "
+                    f"from an older run is reused.")
+                itsm_first_note = (f"The ITSM-first search did not produce "
+                                   f"results (exit "
+                                   f"{st_itsm.get('returncode')}). See the "
+                                   f"ITSM-FIRST section of the console log.")
 
 
     # ---- session cookie liveness, BEFORE any verification ---------------
@@ -2025,7 +2224,7 @@ def main():
     # returns zero rows, which is indistinguishable from "nothing happened"
     # unless we check first. Reporting an auth failure as an empty result is
     # how a perfectly good run gets written up as untested.
-    if not args.report_only and not args.dry_run:
+    if not args.report_only and not args.dry_run and not cycle_block_reason:
         section("SESSION COOKIE — IS IT STILL ALIVE?")
         probe = subprocess.run(
             [sys.executable, script("stage3_verify.py"), "probe"],
@@ -2054,9 +2253,8 @@ def main():
             log("")
             log("            Refresh it, then re-run WITHOUT repeating the")
             log("            cycle:")
-            log("              python3 extract_cookie.py")
-            log("              source .session.env")
-            log("              python3 run_all.py --skip-cycle")
+            log(f"              {relogin_cmd('--login-only')}")
+            log(f"              {relogin_cmd('--skip-cycle')}")
             log("")
             log("            The alert cycle you already ran still counts —")
             log("            --skip-cycle reuses it instead of driving the")
@@ -2081,6 +2279,16 @@ def main():
 
         s3_before = os.path.getmtime(STAGE3_RESULT) \
             if os.path.isfile(STAGE3_RESULT) else None
+
+        if cycle_block_reason:
+            per_monitor.append({"monitor_id": mid, "name": name,
+                                "monitor_type": mon_type,
+                                "blocked": True,
+                                "headline": "Alert cycle never started — "
+                                            "monitor was not driven DOWN "
+                                            "or TROUBLE",
+                                "reason": cycle_block_reason})
+            continue
 
         if not args.report_only:
             argv = [sys.executable, script("stage3_verify.py"), "verify",
@@ -2156,9 +2364,8 @@ def main():
                     "result.")
                 log("            A 400/401/403 here means the Alert Logs "
                     "session cookie is dead.")
-                log("            Refresh it:  node "
-                    "~/Documents/qg/s247_login.js")
-                log("                         source .session.env")
+                log(f"            Refresh it:  {relogin_cmd('--login-only')}")
+                log(f"            Then re-run: {relogin_cmd('--skip-cycle')}")
                 per_monitor.append({"monitor_id": mid, "name": name,
                                     "monitor_type": mon_type,
                                     "blocked": True,
@@ -2429,8 +2636,11 @@ def main():
                 "monitor": label, "monitor_id": pm["monitor_id"],
                 "monitor_type": pm.get("monitor_type") or "",
                 "integration": "(all integrations)", "bucket": BLOCKED,
-                "headline": f"Monitor not verified — {pm.get('reason')}",
-                "detail": f"No verification ran for {label}. This monitor is "
+                "headline": (pm.get("headline")
+                             or f"Monitor not verified — {pm.get('reason')}"),
+                "detail": ((pm.get("reason") + " ") if pm.get("headline")
+                           else "") +
+                          f"No verification ran for {label}. This monitor is "
                           f"UNTESTED in this run; it is not a pass and not a "
                           f"failure.",
                 "site24x7_verdict": None, "tool_verdict": None, "tool": None,
@@ -2522,6 +2732,11 @@ def main():
         health, code = "DEFECT", 1
         reason = (f"{counts[DEFECT]} application defect(s) found. The build "
                   f"has a real problem that a developer must look at.")
+    elif counts.get(BLOCKED) and not counts.get(PASS) and cycle_block_reason:
+        health, code = "BLOCKED", 2
+        reason = ("Nothing could be verified because the alert cycle never "
+                  "started: no monitor reached DOWN or TROUBLE, so no alert "
+                  "fired. " + cycle_block_reason)
     elif counts.get(BLOCKED) and not counts.get(PASS):
         health, code = "BLOCKED", 2
         reason = ("Nothing could be verified. Every result was blocked by a "
@@ -2581,6 +2796,8 @@ def main():
         "stages": stages,
         "stale_inputs": stale,
         "itsm_first": itsm_first_results,
+        "itsm_first_note": itsm_first_note,
+        "cycle_block_reason": cycle_block_reason,
         "window_note": window_note,
         "live_integrations": sorted(live) if live else None,
         "excluded_integrations": sorted(excluded),
@@ -2626,16 +2843,18 @@ def main():
     log(f"  │  JSON  : {json_abs}")
     log(f"  │  JUnit : {xml_abs}")
     log(f"  └──────────────────────────────────────────────────────────┘")
+    # itsm.py opens the report itself once the whole run is finished, so it
+    # sets S247_NO_AUTO_OPEN to stop the report opening twice. Jenkins has no
+    # desktop, so open_in_browser() simply returns False there.
+    _opener = "open" if sys.platform == "darwin" else "xdg-open"
     log(f"\n  Or open from terminal:")
-    log(f"    xdg-open '{html_abs}'")
-    # Also auto-open the report so you never have to click at all
-    try:
-        import subprocess as _sp
-        _sp.Popen(["xdg-open", html_abs],
-                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        log(f"\n  ✅  Report auto-opened in your browser.")
-    except Exception:
-        log(f"\n  (Could not auto-open — use Ctrl+Click on the link above.)")
+    log(f"    {_opener} '{html_abs}'")
+    if not os.environ.get("S247_NO_AUTO_OPEN"):
+        if open_in_browser(html_abs):
+            log(f"\n  ✅  Report auto-opened in your browser.")
+        else:
+            log(f"\n  (No browser opener on this machine — open the link "
+                f"above.)")
     log(f"\n  exit code {code}  (0 = build OK, 1 = defect, 2 = blocked)")
     sys.exit(code)
 
