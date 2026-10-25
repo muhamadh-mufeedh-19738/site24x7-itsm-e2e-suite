@@ -9,7 +9,8 @@
 import groovy.transform.Field
 
 @Field String SD_ACCESS_TOKEN = ''
-@Field Long BASELINE_BUILD_ID = 0L
+@Field List DEPLOY_TARGETS = []      // what this run deploys (WebMon and/or Plus), filled in stage 1
+@Field String PLUS_BUILD_SUFFIX = 'Pluss247Server.zip'
 
 // ===== GRIDS =====================================================
 // One entry per grid. 'sd' = how SD deploys to it (copied from the SD
@@ -33,6 +34,15 @@ import groovy.transform.Field
                          sd : [product: 'WEBMONITOR_PMCLIENT', region: 'CT', dc: 'CT1',
                                stage: 'production', grid: 'pmclient',
                                tar: 'webmonitor.tar']],
+]
+
+// ===== PLUS GRIDS ================================================
+// Grids for the PLUS server build (server / network / poller / cloud monitors).
+// Values copied from the SD "Build Update" screen payload. Add more here.
+@Field Map PLUS_GRIDS = [
+    'integrations-qa-plus': [sd: [product: 'QA_PLUS_INTEGRATIONS', region: 'CT', dc: 'CT1',
+                                  stage: 'production', grid: 'Integrations-qa-plus',
+                                  tar: 'Integrations-qa-plus.tar']],
 ]
 
 // Small Python helper used by stage 5. This server blocks some Linux commands
@@ -195,11 +205,11 @@ def skipDiffReport() {
     return (params.SKIP_DIFF_REPORT == null) ? true : (params.SKIP_DIFF_REPORT as Boolean)
 }
 
-// Returns all SD 'build_update' entries for this exact build URL.
-def findMyBuilds(String buildUrl) {
+// Returns all SD 'build_update' entries for this exact build URL on one SD product.
+def findMyBuilds(String buildUrl, Map sd) {
     String q = "build_url=" + java.net.URLEncoder.encode(buildUrl, 'UTF-8') +
-               "&region=${env.SD_REGION}&sort_by=build_scheduled_at&sort_order=desc&limit=10"
-    def raw = sdRequest('GET', "${env.SD_BASE}/external/v1/status/services/${env.SD_SERVICE}/products/${env.SD_PRODUCT}/build_update?${q}", '')
+               "&region=${sd.region}&sort_by=build_scheduled_at&sort_order=desc&limit=10"
+    def raw = sdRequest('GET', "${env.SD_BASE}/external/v1/status/services/${env.SD_SERVICE}/products/${sd.product}/build_update?${q}", '')
     def r = parseResponse(raw, 'Build status check')
     def result = []
     if (r.json.code != 'SUCCESS') {
@@ -219,6 +229,59 @@ def findMyBuilds(String buildUrl) {
     return result
 }
 
+// The exact request the SD "Build Update" screen sends (copied from its
+// Network > Payload). Same shape for WebMon and Plus; only sd.* and url differ.
+def sdBody(Map t) {
+    return [
+        service_name        : env.SD_SERVICE,
+        product_name        : t.sd.product,
+        data_center         : t.sd.dc,
+        region              : t.sd.region,
+        deployment_mode     : 'live',
+        build_stage         : t.sd.stage,
+        build_url           : t.url,
+        alternate_url       : true,
+        is_patch_update     : false,
+        is_grid_edited      : false,
+        sub_grids           : [t.sd.grid],
+        tar_names           : [t.sd.tar],
+        parallel_products   : [],
+        regions_to_be_synced: [],
+        ro_sync_disabled    : 0,
+        scheduler_details   : [time_to_sync: '0', ro_time_to_sync: env.SD_RO_SYNC_MIN],
+        build_options       : [
+            start_server                       : true,      // "Start Server" (required)
+            static_needed                      : true,      // "Static Needed"
+            iast_jar_needed                    : true,      // "IAST Scan Needed"
+            skip_continue                      : skipDiffReport(),  // "Skip Continue" (diff bypass)
+            skip_continue_for_parallel_products: true,
+            incremental_update                 : false,
+            milestone_tag_needed               : false,
+            fresh_upload                       : false
+        ],
+        notify_to           : [params.NOTIFY_EMAIL.trim()],
+        comment             : params.BUILD_COMMENT.trim(),
+        provision_type      : 'build_update'
+    ]
+}
+
+// How many deploy targets are not finished yet (plain loop: CPS-safe).
+int pendingDeploys() {
+    int n = 0
+    for (t in DEPLOY_TARGETS) { if (!t.done) { n++ } }
+    return n
+}
+
+// POSTs t.bodyFile to SD for t.sd.product. Fails loudly if SD does not accept it.
+def submitDeploy(Map t, String what) {
+    def raw = sdRequest('POST', "${env.SD_BASE}/buildprovision/v1/services/${env.SD_SERVICE}/products/${t.sd.product}/action/build_update", t.bodyFile)
+    def r = parseResponse(raw, "${what} [${t.kind}]")
+    if (r.json.code != 'SUCCESS') {
+        error("[${t.kind}] SD REJECTED THE DEPLOY to ${t.sd.grid} (HTTP ${r.status}): ${r.json.message}. Nothing more was deployed.")
+    }
+    echo "[${t.kind}] SD says: ${r.json.message}"
+}
+
 // ---------- Pipeline ----------
 
 pipeline {
@@ -231,6 +294,9 @@ pipeline {
         booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy the build in SD first. Untick to ONLY run the E2E suite on what is already on the grid (SD_BUILD_URL can then be left empty).')
         booleanParam(name: 'RUN_SUITE', defaultValue: true, description: 'Run the E2E suite after the deploy completes. Untick to only deploy.')
         string(name: 'SD_BUILD_URL', defaultValue: '', description: 'Full build URL to deploy, e.g. https://build.zohocorp.com/zoho/webmonitor/webhost/<BRANCH>/<DATE>/AdventNetWebMon.zip')
+        booleanParam(name: 'DEPLOY_PLUS', defaultValue: false, description: 'Want to check PLUS monitors as well (server / network / poller / cloud)? Tick to ALSO deploy a Plus server build to the Plus grid below.')
+        choice(name: 'PLUS_GRID', choices: ['integrations-qa-plus'], description: 'Plus grid that receives the Plus server build (only used when DEPLOY_PLUS is ticked).')
+        string(name: 'PLUS_BUILD_URL', defaultValue: '', description: 'Plus server build URL - must end with Pluss247Server.zip, e.g. https://build.zohocorp.com/zoho/pluss247server/webhost/master/<DATE>/Pluss247Server.zip (only used when DEPLOY_PLUS is ticked).')
         string(name: 'BUILD_COMMENT', defaultValue: '', description: 'Comment shown in SD for this deploy (feature / fix name)')
         string(name: 'NOTIFY_EMAIL', defaultValue: 'muhamadh.mufeedh@zohocorp.com', description: 'Who SD emails about this deploy')
         booleanParam(name: 'SKIP_DIFF_REPORT', defaultValue: true, description: 'Bypass the SD diff report (same as "Skip Continue" in the SD portal). Keep ticked so the deploy runs to the end without waiting for a manual resume.')
@@ -262,62 +328,92 @@ pipeline {
         stage('1. Check inputs') {
             steps {
                 script {
+                    if (params.ACCOUNT == null || params.RUN_SUITE == null || params.DEPLOY_PLUS == null) {
+                        error('The new boxes are not loaded yet (this happens once after updating the script). Click "Build with Parameters" again - you will now see them. Nothing was deployed.')
+                    }
+
                     // ---- which grid? (always first) ----
                     def g = GRIDS[params.GRID ?: '']
                     if (g == null) {
-                        error("GRID '${params.GRID}' is not known. Known grids: ${GRIDS.keySet().join(', ')}. (First run after a script update? Click Build with Parameters again.)")
+                        error("GRID '${params.GRID}' is not known. Known grids: ${GRIDS.keySet().join(', ')}.")
                     }
                     env.GRID_URL = g.url
                     echo "Grid      : ${params.GRID}  (${g.url})"
-                    if (g.sd != null) {
-                        env.SD_PRODUCT    = g.sd.product
-                        env.SD_REGION     = g.sd.region
-                        env.SD_DATACENTER = g.sd.dc
-                        env.SD_STAGE      = g.sd.stage
-                        env.SD_GRID       = g.sd.grid
-                        env.SD_TAR        = g.sd.tar
-                    } else if (params.DEPLOY != false) {
-                        error("DEPLOY is ticked, but the SD settings for grid '${params.GRID}' are not added to this script yet. Nothing was deployed. Either untick DEPLOY (run the suite only), or add this grid's SD values to GRIDS at the top of the script.")
+                    echo "Account   : ${params.ACCOUNT} (suite will " + (params.RUN_SUITE ? 'RUN' : 'NOT run') + ")"
+
+                    DEPLOY_TARGETS = []
+                    String webUrl  = params.SD_BUILD_URL?.trim()
+                    String plusUrl = params.PLUS_BUILD_URL?.trim()
+
+                    // ---- 1) WebMon build -> the chosen GRID ----
+                    if (params.DEPLOY != false) {
+                        if (g.sd == null) {
+                            error("DEPLOY is ticked, but the SD settings for grid '${params.GRID}' are not in GRIDS yet. Nothing was deployed.")
+                        }
+                        if (!webUrl) {
+                            error('SD_BUILD_URL is empty. Paste the WebMon build URL (…/AdventNetWebMon.zip), or untick DEPLOY.')
+                        }
+                        if (!webUrl.startsWith('https://') || !webUrl.endsWith('.zip')) {
+                            error("SD_BUILD_URL does not look like a build link: ${webUrl} (it must start with https:// and end with .zip)")
+                        }
+                        if (webUrl.endsWith(PLUS_BUILD_SUFFIX)) {
+                            error("SD_BUILD_URL is a PLUS build (${PLUS_BUILD_SUFFIX}). Put it in PLUS_BUILD_URL and tick DEPLOY_PLUS; SD_BUILD_URL is for the WebMon build. Nothing was deployed.")
+                        }
+                        DEPLOY_TARGETS << [kind: 'WebMon', url: webUrl, sd: g.sd, gridName: params.GRID,
+                                           bodyFile: 'sd_build_update.json']
+                    } else {
+                        echo "DEPLOY is OFF: no WebMon build will be deployed to ${params.GRID}."
                     }
 
-                    String url = params.SD_BUILD_URL?.trim()
-                    if (params.DEPLOY == false) {
-                        echo "DEPLOY is OFF: no build will be deployed. Only the E2E suite runs, on whatever is on the grid now."
-                        echo "Account   : ${params.ACCOUNT}"
-                        return
+                    // ---- 2) Plus server build -> the Plus grid (optional) ----
+                    if (params.DEPLOY_PLUS == true) {
+                        def pg = PLUS_GRIDS[params.PLUS_GRID ?: '']
+                        if (pg == null) {
+                            error("PLUS_GRID '${params.PLUS_GRID}' is not known. Known Plus grids: ${PLUS_GRIDS.keySet().join(', ')}.")
+                        }
+                        if (!plusUrl) {
+                            error("DEPLOY_PLUS is ticked but PLUS_BUILD_URL is empty. Paste the Plus build URL (it must end with ${PLUS_BUILD_SUFFIX}), or untick DEPLOY_PLUS. Nothing was deployed.")
+                        }
+                        if (!plusUrl.startsWith('https://') || !plusUrl.endsWith(PLUS_BUILD_SUFFIX)) {
+                            error("PLUS_BUILD_URL must start with https:// and end with '${PLUS_BUILD_SUFFIX}'. Got: ${plusUrl}. Nothing was deployed.")
+                        }
+                        DEPLOY_TARGETS << [kind: 'Plus', url: plusUrl, sd: pg.sd, gridName: params.PLUS_GRID,
+                                           bodyFile: 'sd_build_update_plus.json']
+                    } else if (plusUrl) {
+                        echo "NOTE: PLUS_BUILD_URL is filled but DEPLOY_PLUS is not ticked - the Plus build will NOT be deployed."
                     }
-                    if (!url) {
-                        error('SD_BUILD_URL is empty. Click "Build with Parameters" and paste the build URL.')
+
+                    if (DEPLOY_TARGETS) {
+                        if (!params.BUILD_COMMENT?.trim()) {
+                            error('BUILD_COMMENT is empty. Add a short comment so the deploy is recognisable in SD.')
+                        }
+                        if (!params.NOTIFY_EMAIL?.contains('@')) {
+                            error("NOTIFY_EMAIL is not a valid email: ${params.NOTIFY_EMAIL}")
+                        }
+                        echo "Comment   : ${params.BUILD_COMMENT}"
+                        for (t in DEPLOY_TARGETS) {
+                            echo "Deploy ${t.kind}: ${t.url}"
+                            echo "   target : ${t.sd.product} / ${t.sd.region} / ${t.sd.dc} / ${t.sd.stage} / grid ${t.sd.grid}"
+                        }
+                        echo "Diff report: " + (skipDiffReport() ? 'BYPASSED (Skip Continue on)' : 'NOT bypassed - SD will pause for a manual resume')
+                    } else {
+                        echo "Nothing to deploy. Only the E2E suite runs, on whatever is on the grid(s) now."
                     }
-                    if (!url.startsWith('https://') || !url.endsWith('.zip')) {
-                        error("SD_BUILD_URL does not look like a build link: ${url} (it must start with https:// and end with .zip)")
-                    }
-                    if (!params.BUILD_COMMENT?.trim()) {
-                        error('BUILD_COMMENT is empty. Add a short comment so the deploy is recognisable in SD.')
-                    }
-                    if (!params.NOTIFY_EMAIL?.contains('@')) {
-                        error("NOTIFY_EMAIL is not a valid email: ${params.NOTIFY_EMAIL}")
-                    }
-                    if (params.ACCOUNT == null || params.RUN_SUITE == null) {
-                        error('The new boxes (ACCOUNT / RUN_SUITE) are not loaded yet. This happens once after updating the script. Click "Build with Parameters" again - you will now see them. Nothing was deployed.')
-                    }
-                    echo "Build URL : ${url}"
-                    echo "Account   : ${params.ACCOUNT} (suite will " + (params.RUN_SUITE ? 'RUN' : 'NOT run') + " after deploy)"
-                    echo "Comment   : ${params.BUILD_COMMENT}"
-                    echo "Target    : ${env.SD_PRODUCT} / ${env.SD_REGION} / ${env.SD_DATACENTER} / ${env.SD_STAGE} / grid ${env.SD_GRID}"
-                    echo "Diff report: " + (skipDiffReport() ? 'BYPASSED (Skip Continue on)' : 'NOT bypassed - SD will pause for a manual resume')
                 }
             }
         }
 
-        // Everything that touches the GRID runs inside one lock per grid, so two
-        // builds can never deploy/test the SAME grid at the same time. Builds for
-        // DIFFERENT grids run in parallel. (Needs the 'Lockable Resources' plugin.)
+        // Everything that touches a GRID runs inside locks, so two builds can never
+        // deploy/test the SAME grid (or the same Plus grid) at the same time.
+        // Builds for DIFFERENT grids run in parallel. (Needs 'Lockable Resources'.)
         stage('Grid run') {
-            options { lock(resource: "grid-${params.GRID}") }
+            options {
+                lock(resource: "grid-${params.GRID}",
+                     extra: [[resource: "plusgrid-${params.DEPLOY_PLUS ? params.PLUS_GRID : 'unused-' + env.BUILD_TAG}"]])
+            }
             stages {
                 stage('2. Get fresh SD access token') {
-                    when { expression { params.DEPLOY != false } }
+                    when { expression { DEPLOY_TARGETS } }
                     steps {
                         script {
                             withCredentials([string(credentialsId: 'SD_REFRESH_TOKEN', variable: 'SD_REFRESH')]) {
@@ -336,142 +432,93 @@ pipeline {
                     }
                 }
 
-                stage('3. Deploy build in SD') {
-                    when { expression { params.DEPLOY != false } }
+                stage('3. Deploy build(s) in SD') {
+                    when { expression { DEPLOY_TARGETS } }
                     steps {
                         script {
-                            String buildUrl = params.SD_BUILD_URL.trim()
-
-                            // Remember the newest existing SD entry for this URL,
-                            // so stage 4 only tracks the NEW deploy we start now.
-                            BASELINE_BUILD_ID = 0L
-                            for (e in findMyBuilds(buildUrl)) {
-                                long id = e.build_id as Long
-                                if (id > BASELINE_BUILD_ID) { BASELINE_BUILD_ID = id }
+                            // WebMon and Plus are submitted one after the other, then
+                            // stage 4 waits for BOTH in parallel (saves ~10 min).
+                            for (t in DEPLOY_TARGETS) {
+                                // newest existing SD entry for this URL, so stage 4 only
+                                // tracks the NEW deploy we start now
+                                t.baseline = 0L
+                                for (e in findMyBuilds(t.url, t.sd)) {
+                                    long id = e.build_id as Long
+                                    if (id > t.baseline) { t.baseline = id }
+                                }
+                                echo "[${t.kind}] newest existing SD entry for this URL: build_id ${t.baseline} (0 = never deployed before)"
+                                writeJSON file: t.bodyFile, json: sdBody(t), pretty: 2
+                                echo "[${t.kind}] request sent to SD:\n" + readFile(t.bodyFile)
+                                submitDeploy(t, 'Build update')
                             }
-                            echo "Newest existing SD entry for this URL: build_id ${BASELINE_BUILD_ID} (0 = never deployed before)"
-
-                            // Same request the SD "Build Update" screen sends (copied from its Network > Payload)
-                            def body = [
-                                service_name        : env.SD_SERVICE,
-                                product_name        : env.SD_PRODUCT,
-                                data_center         : env.SD_DATACENTER,
-                                region              : env.SD_REGION,
-                                deployment_mode     : 'live',
-                                build_stage         : env.SD_STAGE,
-                                build_url           : buildUrl,
-                                alternate_url       : true,
-                                is_patch_update     : false,
-                                is_grid_edited      : false,
-                                sub_grids           : [env.SD_GRID],
-                                tar_names           : [env.SD_TAR],
-                                parallel_products   : [],
-                                regions_to_be_synced: [],
-                                ro_sync_disabled    : 0,
-                                scheduler_details   : [time_to_sync: '0', ro_time_to_sync: env.SD_RO_SYNC_MIN],
-                                build_options       : [
-                                    start_server                       : true,      // "Start Server" - was missing before
-                                    static_needed                      : true,      // "Static Needed"
-                                    iast_jar_needed                    : true,      // "IAST Scan Needed"
-                                    skip_continue                      : skipDiffReport(),  // "Skip Continue" (diff bypass)
-                                    skip_continue_for_parallel_products: true,
-                                    incremental_update                 : false,
-                                    milestone_tag_needed               : false,
-                                    fresh_upload                       : false
-                                ],
-                                notify_to           : [params.NOTIFY_EMAIL.trim()],
-                                comment             : params.BUILD_COMMENT.trim(),
-                                provision_type      : 'build_update'
-                            ]
-                            writeJSON file: 'sd_build_update.json', json: body, pretty: 2
-                            echo "Request sent to SD:\n" + readFile('sd_build_update.json')
-
-                            def raw = sdRequest('POST', "${env.SD_BASE}/buildprovision/v1/services/${env.SD_SERVICE}/products/${env.SD_PRODUCT}/action/build_update", 'sd_build_update.json')
-                            def r = parseResponse(raw, 'Build update')
-                            if (r.json.code != 'SUCCESS') {
-                                error("SD REJECTED THE DEPLOY (HTTP ${r.status}): ${r.json.message}")
-                            }
-                            echo "SD says: ${r.json.message}"
                         }
                     }
                 }
 
-                stage('4. Wait for deploy to finish') {
-                    when { expression { params.DEPLOY != false } }
+                stage('4. Wait for deploy(s) to finish') {
+                    when { expression { DEPLOY_TARGETS } }
                     steps {
                         script {
-                            String buildUrl = params.SD_BUILD_URL.trim()
                             int maxChecks = Integer.parseInt(env.SD_MAX_WAIT_MINUTES)
-                            def failStates = ['failed', 'killed', 'reverted', 'skipped']
-                            boolean done = false
-                            int retries = 0
                             int maxRetries = Integer.parseInt(env.SD_MAX_RETRIES)
+                            def failStates = ['failed', 'killed', 'reverted', 'skipped']
+                            for (t in DEPLOY_TARGETS) { t.done = false; t.retries = 0; t.checks = 0 }
 
-                            for (int i = 1; i <= maxChecks && !done; i++) {
-                                def mine = null
-                                for (e in findMyBuilds(buildUrl)) {
-                                    long id = e.build_id as Long
-                                    if (id > BASELINE_BUILD_ID && (mine == null || id > (mine.build_id as Long))) {
-                                        mine = e
+                            while (pendingDeploys() > 0) {
+                                for (t in DEPLOY_TARGETS) {
+                                    if (t.done) { continue }
+                                    t.checks++
+                                    if (t.checks > maxChecks) {
+                                        error("[${t.kind}] TIMED OUT: deploy to ${t.sd.grid} not Completed after ${maxChecks} minutes. Open it in SD: if it says 'Diff Report Generated', it is waiting for a manual resume. Otherwise it may still be running - check SD before re-running.")
                                     }
-                                }
-
-                                if (mine == null) {
-                                    echo "Check ${i}/${maxChecks}: SD has not listed the new deploy yet. Waiting 1 minute..."
-                                } else {
+                                    def mine = null
+                                    for (e in findMyBuilds(t.url, t.sd)) {
+                                        long id = e.build_id as Long
+                                        if (id > t.baseline && (mine == null || id > (mine.build_id as Long))) { mine = e }
+                                    }
+                                    if (mine == null) {
+                                        echo "[${t.kind}] check ${t.checks}/${maxChecks}: SD has not listed the new deploy yet"
+                                        continue
+                                    }
                                     String st = String.valueOf(mine.overall_status)
-                                    echo "Check ${i}/${maxChecks}: build_id ${mine.build_id} | overall=${st} | sd=${mine.status?.sd_status} | zac=${mine.status?.zac_status}"
+                                    echo "[${t.kind}] check ${t.checks}/${maxChecks}: build_id ${mine.build_id} | overall=${st} | sd=${mine.status?.sd_status} | zac=${mine.status?.zac_status}"
 
                                     if (st.toLowerCase() in failStates) {
                                         String zac = String.valueOf(mine.status?.zac_status ?: '').trim()
                                         boolean neverReachedGrid = (zac == '' || zac == 'null' || zac == '-')
-                                        if (neverReachedGrid && retries < maxRetries) {
-                                            // SD failed while PREPARING (before touching the grid).
-                                            // The same build usually goes through when submitted again,
-                                            // exactly like re-deploying it by hand from the SD screen.
-                                            retries++
-                                            echo "!!! SD FAILED WHILE PREPARING build_id ${mine.build_id} (grid not touched). Re-submitting the same request - attempt ${retries + 1} of ${maxRetries + 1} ..."
-                                            BASELINE_BUILD_ID = mine.build_id as Long
-                                            sleep(time: 60, unit: 'SECONDS')
-                                            def raw2 = sdRequest('POST', "${env.SD_BASE}/buildprovision/v1/services/${env.SD_SERVICE}/products/${env.SD_PRODUCT}/action/build_update", 'sd_build_update.json')
-                                            def r2 = parseResponse(raw2, 'Build update (retry)')
-                                            if (r2.json.code != 'SUCCESS') {
-                                                error("SD REJECTED THE RE-SUBMIT (HTTP ${r2.status}): ${r2.json.message}")
-                                            }
-                                            echo "SD says: ${r2.json.message}"
-                                            i = 0          // restart the wait for the new attempt
+                                        if (neverReachedGrid && t.retries < maxRetries) {
+                                            // SD failed while PREPARING (grid not touched): submit the same
+                                            // request again, like re-deploying it by hand from the SD screen.
+                                            t.retries++
+                                            echo "!!! [${t.kind}] SD FAILED WHILE PREPARING build_id ${mine.build_id} (grid not touched). Re-submitting - attempt ${t.retries + 1} of ${maxRetries + 1} ..."
+                                            t.baseline = mine.build_id as Long
+                                            t.checks = 0
+                                            submitDeploy(t, 'Build update (retry)')
                                             continue
                                         }
-                                        error("SD DEPLOY FAILED: build_id ${mine.build_id} ended with '${st}'" + (retries > 0 ? " (after ${retries} automatic re-submit(s))" : '') + ". Open SD, click the build and read the red 'Reason'.")
+                                        error("[${t.kind}] SD DEPLOY FAILED: build_id ${mine.build_id} on ${t.sd.grid} ended with '${st}'" + (t.retries > 0 ? " (after ${t.retries} automatic re-submit(s))" : '') + ". Open SD, click the build and read the red 'Reason'.")
                                     }
 
                                     if (st == 'Completed') {
                                         boolean gridOk = false
                                         def groups = mine.initiated_groups
                                         if (groups instanceof String) {
-                                            gridOk = groups.toLowerCase().contains(env.SD_GRID.toLowerCase())
+                                            gridOk = groups.toLowerCase().contains(t.sd.grid.toLowerCase())
                                         } else {
-                                            for (g in groups) {
-                                                if (String.valueOf(g.group_name).equalsIgnoreCase(env.SD_GRID) && String.valueOf(g.status) == 'Completed') {
-                                                    gridOk = true
-                                                }
+                                            for (gr in groups) {
+                                                if (String.valueOf(gr.group_name).equalsIgnoreCase(t.sd.grid) && String.valueOf(gr.status) == 'Completed') { gridOk = true }
                                             }
                                         }
                                         if (!gridOk) {
-                                            error("SD says Completed, but grid '${env.SD_GRID}' is not marked Completed. Check SD before testing.")
+                                            error("[${t.kind}] SD says Completed, but grid '${t.sd.grid}' is not marked Completed. Check SD before testing.")
                                         }
-                                        echo "DEPLOY COMPLETE on ${env.SD_GRID} (build_id ${mine.build_id})"
-                                        done = true
+                                        echo "[${t.kind}] DEPLOY COMPLETE on ${t.sd.grid} (build_id ${mine.build_id})"
+                                        t.done = true
                                     }
                                 }
-
-                                if (!done) {
+                                if (pendingDeploys() > 0) {
                                     sleep(time: 60, unit: 'SECONDS')
                                 }
-                            }
-
-                            if (!done) {
-                                error("TIMED OUT: deploy not Completed after ${maxChecks} minutes. Open the build in SD: if it says 'Diff Report Generated', it is waiting for a manual resume. Otherwise it may still be running - check SD before re-running.")
                             }
                         }
                     }
@@ -627,10 +674,13 @@ pipeline {
     post {
         always {
             script { SD_ACCESS_TOKEN = '' }
-            archiveArtifacts artifacts: 'sd_build_update.json', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'sd_build_update*.json', allowEmptyArchive: true
         }
         success {
-            echo "PIPELINE PASSED: ${params.SD_BUILD_URL} is live on ${params.GRID}" + (params.RUN_SUITE ? " and the E2E suite passed for '${params.ACCOUNT}'" : '')
+            script {
+                for (t in DEPLOY_TARGETS) { echo "DEPLOYED [${t.kind}]: ${t.url} is live on ${t.sd.grid}" }
+                echo "PIPELINE PASSED" + (params.RUN_SUITE ? ": the E2E suite passed for '${params.ACCOUNT}' on ${params.GRID}" : '')
+            }
         }
         unstable {
             echo "PIPELINE UNSTABLE: deploy OK, but the E2E suite found defects. See 'Integrations E2E Report'."
