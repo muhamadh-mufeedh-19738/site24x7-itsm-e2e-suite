@@ -936,6 +936,34 @@ def build_findings(stage3, stage4, known, live_recs=None,
         # Determine live status: deleted/suspended/active/unknown
         integ_st = integration_status(integ, live_recs)
         bucket, headline, detail = classify(e, s4, known, integ_status=integ_st)
+
+        # CHAT / NOTIFICATION channels (Slack, Discord, Telegram, Teams,
+        # webhooks...) never create a ticket, so "no tool-side verification"
+        # is not a gap for them -- the Alert Logs ARE the full proof. Decided
+        # by the APP TYPE from the live integration list (is_itsm), never by
+        # a hard-coded name.
+        rec = next((r for r in (live_recs or [])
+                    if str(r.get("name", "")).lower() == str(integ).lower()), None)
+        notify_only = rec is not None and not is_itsm(rec)
+        if notify_only and integ_st == "active" and bucket == BLOCKED \
+                and headline == "No tool-side verification configured":
+            rows_n = int(e.get("rows") or 0)
+            failed_n = int(e.get("failed_rows") or 0)
+            if rows_n and not failed_n:
+                bucket = PASS
+                headline = "Alert delivered (chat / notification tool — no ticket)"
+                detail = (f"'{integ}' is a chat / notification integration: it "
+                          f"posts a message and never creates a ticket. Site24x7's "
+                          f"Alert Logs show {rows_n} delivery row(s) for this cycle "
+                          f"and 0 failures, so every alert reached it. There is no "
+                          f"ticket to read back, so no tool-side check is needed.")
+            elif failed_n:
+                bucket = DEFECT
+                headline = "Alert delivery FAILED (chat / notification tool)"
+                detail = (f"'{integ}' is a chat / notification integration. "
+                          f"Site24x7's Alert Logs show {failed_n} FAILED delivery "
+                          f"row(s) out of {rows_n} in this cycle, so some alerts "
+                          f"did not reach it.")
         # TRIGGER TEST override: a GENUINE pre-flight FAIL (wrong API key,
         # expired OAuth, bad instance URL, dead destination) means the
         # integration was broken from the start, so a lifecycle "defect" for
@@ -1005,6 +1033,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "matched_on_up_ticket_ids": e.get("matched_on_up_ticket_ids") or [],
             "alert_log_rows": e.get("rows"),
             "failed_rows": e.get("failed_rows"),
+            "notify_only": notify_only,
             "tool_tickets": (s4 or {}).get("tickets") or [],
             # WEB_MON DB evidence — proves ticket IDs came from
             # WM_ALERT_LOGS.RequestMessageId (Cassandra), not guessed.
@@ -1097,7 +1126,7 @@ CSS = """
 *{box-sizing:border-box}
 body{margin:0;padding:32px;background:#f4f5f7;color:#1b1f23;
  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-.wrap{max-width:1080px;margin:0 auto}
+.wrap{max-width:1240px;margin:0 auto}
 h1{font-size:26px;margin:0 0 4px}
 h2{font-size:18px;margin:34px 0 12px;padding-bottom:7px;border-bottom:2px solid #e1e4e8}
 .sub{color:#57606a;margin:0 0 24px}
@@ -1138,7 +1167,12 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font
 .foot{color:#57606a;font-size:12.5px;margin-top:34px;border-top:1px solid #d8dee4;padding-top:14px}
 .ok{color:#1a7f37;font-weight:600}.bad{color:#cf222e;font-weight:600}
 /* Results-by-integration table: clear, scannable, laymen-friendly */
-table.results{border:1px solid #e1e4e8;border-radius:8px;overflow:hidden}
+table.results{border:1px solid #e1e4e8;border-radius:8px;table-layout:fixed;width:100%;font-size:13px}
+.tablewrap{overflow-x:auto;margin:0 -4px;padding:0 4px}
+table.results th{white-space:normal;font-size:10.5px;line-height:1.3}
+table.results td{overflow-wrap:anywhere;line-height:1.4}
+table.results tr.grp td{background:#f6f8fa;border-top:2px solid #d8dee4;padding:7px 10px;font-weight:600;font-size:12.5px}
+table.results tr.grp .cnt{color:#57606a;font-weight:400;margin-left:6px}
 table.results thead th{background:#f6f8fa;border-bottom:2px solid #d8dee4;
  position:sticky;top:0}
 table.results tbody tr{transition:background .1s}
@@ -1232,6 +1266,10 @@ def lifecycle_steps_html(finding):
                 f'border:1px solid {bd};border-radius:4px;padding:1px 7px;'
                 f'margin:1px 3px 1px 0;font-size:11px;font-weight:600;'
                 f'color:{col};white-space:nowrap">{ico} {esc(text)}</span>')
+
+    if finding.get("notify_only"):
+        ok = bucket == PASS
+        return chip(ok, "Alert delivered" if ok else "Delivery failed")
 
     # Not a lifecycle finding (blocked monitor / server coverage / no rows)
     if bucket in (BLOCKED, INCONCLUSIVE, KNOWN) and not created:
@@ -1336,6 +1374,9 @@ def write_html(path, ctx):
         return f'<span style="color:#1a7f37">{esc(txt)} ✓</span>'
 
     def _tool_cell(x):
+        if x.get("notify_only"):
+            return ('<span style="color:#57606a">not needed &mdash; chat / '
+                    'notification tool (no ticket)</span>')
         tv = str(x.get("tool_verdict") or "")
         tool = x.get("tool")
         if not tv:
@@ -1363,13 +1404,23 @@ def write_html(path, ctx):
         return f'<span style="color:{col}">{toolp}confirmed {ico}</span>'
 
     rows = ""
-    for x in f:
+    _order = [DEFECT, BLOCKED, INCONCLUSIVE, KNOWN, PASS]
+    _order += sorted({y["bucket"] for y in f} - set(_order))
+    _sorted = sorted(f, key=lambda y: _order.index(y["bucket"]))
+    _last = None
+    for x in _sorted:
         bucket = x["bucket"]
+        if bucket != _last:
+            _n = sum(1 for y in f if y["bucket"] == bucket)
+            rows += (f'<tr class="grp"><td colspan="7"><span class="pill {bucket}">'
+                     f'{bucket}</span><span class="cnt">{_n} row(s) &mdash; '
+                     f'{esc(RESULT_MEANING.get(bucket, ""))}</span></td></tr>')
+            _last = bucket
         meaning = RESULT_MEANING.get(bucket, "")
         rows += f"""<tr class="b-{bucket}">
 <td>{monitor_type_badge(x.get('monitor_type'))}<div style="margin-top:3px;font-size:12.5px;color:#1b1f23">{esc(x.get('monitor'))}</div></td>
 <td><strong>{esc(x['integration'])}</strong>{(f'<div style="font-size:10.5px;color:#57606a">via {esc(x["tool"])}</div>' if x.get('tool') else '')}</td>
-<td style="white-space:nowrap"><span class="pill {bucket}">{bucket}</span><div style="font-size:10.5px;color:#57606a;margin-top:4px">{esc(meaning)}</div></td>
+<td><span class="pill {bucket}">{bucket}</span><div style="font-size:10.5px;color:#57606a;margin-top:4px">{esc(meaning)}</div></td>
 <td>{lifecycle_steps_html(x)}</td>
 <td style="font-size:12.5px">{esc(x['headline'])}</td>
 <td style="font-size:12px">{_alertlog_cell(x)}</td>
@@ -1707,18 +1758,20 @@ Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finis
 <strong>what</strong> was monitored &rarr; <strong>which</strong> integration &rarr; the overall <strong>result</strong> &rarr;
 the <strong>ticket life-cycle</strong> steps &rarr; and the two independent <strong>proofs</strong>
 (Site24x7's own Alert Logs, and the ticket read back inside the ITSM tool).</p>
-<table class="results">
+<div class="tablewrap"><table class="results">
+<colgroup><col style="width:13%"><col style="width:16%"><col style="width:12%">
+<col style="width:13%"><col style="width:22%"><col style="width:11%"><col style="width:13%"></colgroup>
 <thead><tr>
-<th>Monitor&nbsp;/&nbsp;Type</th>
+<th>Monitor</th>
 <th>Integration</th>
 <th>Result</th>
-<th>Ticket life-cycle</th>
+<th>Ticket steps</th>
 <th>What happened</th>
-<th>Proof&nbsp;1:&nbsp;Alert&nbsp;Logs</th>
-<th>Proof&nbsp;2:&nbsp;Inside&nbsp;the&nbsp;tool</th>
+<th>Proof 1: Alert Logs</th>
+<th>Proof 2: Inside the tool</th>
 </tr></thead>
 <tbody>
-{rows}</tbody></table>
+{rows}</tbody></table></div>
 <p class="det" style="margin-bottom:0;margin-top:14px;font-size:12px;color:#57606a">
 <strong>Life-cycle steps:</strong>
 <span style="color:#1a7f37">✓ green</span> = done &nbsp;·&nbsp;
