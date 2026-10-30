@@ -178,7 +178,49 @@ def upload_one(jk, cred, path):
     return False, f"could not read it (HTTP {st})"
 
 
+def _read_kv(path):
+    out = {}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = re.match(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line.rstrip("\n"))
+            if m:
+                v = m.group(2).strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                    v = v[1:-1]
+                out[m.group(1)] = v
+    return out
+
+
+def problem_with(cred, path):
+    """Return a reason this file must NOT go to Jenkins, or None if it looks sane.
+    Same rules the Jenkins pipeline enforces, so a broken file never replaces a good one."""
+    try:
+        kv = _read_kv(path)
+    except OSError as e:
+        return f"cannot read file ({e})"
+    if cred.endswith("_ACCOUNT_ENV"):
+        user = kv.get("S247_LOGIN_USER", "")
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", user):
+            return (f"S247_LOGIN_USER '{user}' is not a valid email (needs an @) "
+                    f"-> python3 save_login.py --account {cred.split('_')[1].lower()}")
+        if not kv.get("S247_LOGIN_PASS"):
+            return "S247_LOGIN_PASS is empty -> run save_login.py for this account"
+    elif cred.endswith("_TOKEN_ENV"):
+        if not any(k.lower() == "refresh_token" and v for k, v in kv.items()):
+            return "no refresh_token in the file -> run save_grant.py for this account"
+    return None
+
+
 def push(todo, conf, quiet=False):
+    blocked = [(c, p, f, problem_with(c, p)) for c, p, f in todo]
+    for cred, _, _, why in blocked:
+        if why:
+            print(f"   [SKIP] {cred:<28} NOT uploaded - {why}")
+    todo = [(c, p, f) for c, p, f, why in blocked if not why]
+    skipped = len(blocked) - len(todo)
+    if not todo:
+        print(f"[JENKINS] nothing uploaded - fix the {skipped} file(s) above first.")
+        return skipped
     jk = Jenkins(conf)
     st, who = jk.login()
     if st != 200:
