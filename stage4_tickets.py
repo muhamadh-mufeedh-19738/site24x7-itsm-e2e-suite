@@ -147,17 +147,34 @@ class Tool:
 class Halo(Tool):
     name = "HALO ITSM"
 
+    # Same header Site24x7 itself sends to Halo when an integration uses an
+    # API key (s247_Integrations halo_itsm.json: "auth_prefix":
+    # "X-Halo-Api-Key"). When HALO_API_KEY is set it wins; otherwise the
+    # OAuth client-credentials flow is used as before.
+    API_KEY_HEADER = "X-Halo-Api-Key"
+
     def __init__(self):
         self.url = env("HALO_URL").rstrip("/")
+        self.api_key = env("HALO_API_KEY")
         self.cid = env("HALO_CLIENT_ID")
         self.secret = env("HALO_CLIENT_SECRET")
         self.tenant = env("HALO_TENANT")
         self.token = None
 
     def configured(self):
-        return bool(self.url and self.cid and self.secret)
+        return bool(self.url and (self.api_key or (self.cid and self.secret)))
+
+    def _headers(self):
+        h = {"Accept": "application/json"}
+        if self.api_key:
+            h[self.API_KEY_HEADER] = self.api_key
+        elif self.token:
+            h["Authorization"] = f"Bearer {self.token}"
+        return h
 
     def _auth(self):
+        if self.api_key:
+            return True, "API key"
         if self.token:
             return True, "cached"
         auth_url = f"{self.url}/auth/token"
@@ -175,8 +192,16 @@ class Halo(Tool):
 
     def connect(self):
         if not self.configured():
-            return False, "not configured"
-        return self._auth()
+            return False, ("not configured (set HALO_URL and HALO_API_KEY, "
+                           "or HALO_CLIENT_ID/SECRET, in .itsm.env)")
+        ok, how = self._auth()
+        if not ok:
+            return ok, how
+        st, js, raw = request(f"{self.url}/api/Tickets?count=1",
+                              headers=self._headers())
+        if st == 200:
+            return True, f"tickets readable ({how})"
+        return False, f"tickets endpoint status={st} ({how}) {str(raw)[:150]}"
 
     def search_by_window(self, monitor_text, since_utc, until_utc):
         """Search HALO for tickets created in this window."""
@@ -188,7 +213,7 @@ class Halo(Tool):
         since_str = since_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         until_str = until_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         st, js, raw = request(
-            f"{self.url}/Tickets?search={urllib.parse.quote(monitor_text)}"
+            f"{self.url}/api/Tickets?search={urllib.parse.quote(monitor_text)}"
             f"&count=20&order=id&orderdesc=true",
             headers=self._headers())
         if st != 200 or not isinstance(js, dict):
@@ -215,8 +240,7 @@ class Halo(Tool):
             return {"found": False, "error": detail}
         st, js, raw = request(
             f"{self.url}/api/Tickets/{urllib.parse.quote(str(tid))}",
-            headers={"Authorization": f"Bearer {self.token}",
-                     "Accept": "application/json"})
+            headers=self._headers())
         if st == 200 and isinstance(js, dict):
             # FIX: the original expression had a precedence bug -- when Halo
             # returned a plain string status, status_name was ignored.

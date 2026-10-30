@@ -1,170 +1,1072 @@
 {
-  "captured_at": "2026-09-30T08:56:12.202Z",
+  "captured_at": "2026-10-30T13:55:26.901Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
+    "https://integrations-qa.localsite24x7.com/app/api/network/short/interfaces",
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
   ],
   "integrations": [
     {
-      "name": "Check Up Alert Closevkjfs",
+      "name": "eth0/1-Port 1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254267",
+        "monitor_id": "47777000051254259",
+        "name": "eth0/1-Port 1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0-Management",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254185",
+        "monitor_id": "47777000051254159",
+        "name": "GigabitEthernet0-Management",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0-WAN Ethernet",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000046527136",
+        "monitor_id": "47777000046527108",
+        "name": "GigabitEthernet0/0-WAN Ethernet",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/0-Access-VLAN-100",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254150",
+        "monitor_id": "47777000051254125",
+        "name": "GigabitEthernet0/0/0-Access-VLAN-100",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/1-Access Port 1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254186",
+        "monitor_id": "47777000051254159",
+        "name": "GigabitEthernet0/0/1-Access Port 1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/1-Access-VLAN-200",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254151",
+        "monitor_id": "47777000051254125",
+        "name": "GigabitEthernet0/0/1-Access-VLAN-200",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/2-Access Port 2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254187",
+        "monitor_id": "47777000051254159",
+        "name": "GigabitEthernet0/0/2-Access Port 2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/2-Access-VLAN-300",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254152",
+        "monitor_id": "47777000051254125",
+        "name": "GigabitEthernet0/0/2-Access-VLAN-300",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/3-Access Port 3",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254188",
+        "monitor_id": "47777000051254159",
+        "name": "GigabitEthernet0/0/3-Access Port 3",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/0/4-Access Port 4",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254184",
+        "monitor_id": "47777000051254159",
+        "name": "GigabitEthernet0/0/4-Access Port 4",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/1-Gi0/1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000046527137",
+        "monitor_id": "47777000046527108",
+        "name": "GigabitEthernet0/1-Gi0/1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/1-Port 1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452041",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/1-Port 1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/10-Port 10",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452053",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/10-Port 10",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/11-Port 11",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452054",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/11-Port 11",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/12-Port 12",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452055",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/12-Port 12",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/13-Port 13",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452056",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/13-Port 13",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/14-Port 14",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452057",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/14-Port 14",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/15-Port 15",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452058",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/15-Port 15",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/16-Port 16",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452059",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/16-Port 16",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/17-Port 17",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452060",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/17-Port 17",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/18-Port 18",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452061",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/18-Port 18",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/19-Port 19",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452062",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/19-Port 19",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/2-Port 2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452042",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/2-Port 2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/2-test",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000046527138",
+        "monitor_id": "47777000046527108",
+        "name": "GigabitEthernet0/2-test",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/20-Port 20",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452063",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/20-Port 20",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/21-Port 21",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452064",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/21-Port 21",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/22-Port 22",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452040",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/22-Port 22",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/23-Port 23",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452044",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/23-Port 23",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/24-Port 24",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452046",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/24-Port 24",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/25-Port 25",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254224",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/25-Port 25",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/26-Port 26",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254233",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/26-Port 26",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/27-Port 27",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254243",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/27-Port 27",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/28-Port 28",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254248",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/28-Port 28",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/29-Port 29",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254247",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/29-Port 29",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/3-Gi0/3",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000046527139",
+        "monitor_id": "47777000046527108",
+        "name": "GigabitEthernet0/3-Gi0/3",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/3-Port 3",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452045",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/3-Port 3",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/30-Port 30",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254237",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/30-Port 30",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/31-Port 31",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254231",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/31-Port 31",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/32-Port 32",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254240",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/32-Port 32",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/33-Port 33",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254244",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/33-Port 33",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/34-Port 34",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254229",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/34-Port 34",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/35-Port 35",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254246",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/35-Port 35",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/36-Port 36",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254220",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/36-Port 36",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/37-Port 37",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254208",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/37-Port 37",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/38-Port 38",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254216",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/38-Port 38",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/39-Port 39",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254232",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/39-Port 39",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/4-Port 4",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452047",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/4-Port 4",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/40-Port 40",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254211",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/40-Port 40",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/41-Port 41",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254236",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/41-Port 41",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/42-Port 42",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254235",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/42-Port 42",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/43-Port 43",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254238",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/43-Port 43",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/44-Port 44",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254212",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/44-Port 44",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/45-Port 45",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254210",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/45-Port 45",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/46-Port 46",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254241",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/46-Port 46",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/47-Port 47",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254217",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/47-Port 47",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/48-Port 48",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254219",
+        "monitor_id": "47777000051254192",
+        "name": "GigabitEthernet0/48-Port 48",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/5-Port 5",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452048",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/5-Port 5",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/6-Port 6",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452050",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/6-Port 6",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/7-Port 7",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452051",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/7-Port 7",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/8-Port 8",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452039",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/8-Port 8",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet0/9-Port 9",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452052",
+        "monitor_id": "47777000051452030",
+        "name": "GigabitEthernet0/9-Port 9",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet1-Gi1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153653",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet1-Gi1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet2-Gi2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153654",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet2-Gi2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet3-Gi3",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153655",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet3-Gi3",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet4-Gi4",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153656",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet4-Gi4",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet5-Gi5",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153657",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet5-Gi5",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet7-Gi7",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153658",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet7-Gi7",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "GigabitEthernet8-Gi8",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153652",
+        "monitor_id": "47777000050153617",
+        "name": "GigabitEthernet8-Gi8",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "HALO CMDB Sync",
       "type": null,
-      "type_id": "20",
+      "type_id": "43",
       "status": "Active",
       "raw": {
         "sendClearAlerts": "0",
         "down_alert": true,
-        "department_id": "213004000000006907",
-        "oauth2_provider_id": "47777000028874080",
+        "cmdb_integration": true,
+        "credential_profile_id": "47777000051466015",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 43,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "url": "https://salsabeelu.haloitsm.com/",
+        "action_on_deletion": "2",
+        "selection_type": 0,
+        "credential_type": "1",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000051466016",
+        "associate_ci_id": true,
+        "service_status": 0,
+        "name": "HALO CMDB Sync",
+        "cmdb_selection_type": "0"
+      }
+    },
+    {
+      "name": "HundredGigE0/0/0-Uplink to Core-1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254146",
+        "monitor_id": "47777000051254125",
+        "name": "HundredGigE0/0/0-Uplink to Core-1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "HundredGigE0/0/1-Uplink to Core-2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254145",
+        "monitor_id": "47777000051254125",
+        "name": "HundredGigE0/0/1-Uplink to Core-2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "ilert",
+      "type": null,
+      "type_id": "33",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "problem_alert": false,
+        "type": 33,
+        "alert_tags_id": [],
+        "url": "https://api.ilert.com/api/v1/events/site24x7/il1s271026d340dfcdd03b4bfca98f138b23a00f08bd17bca75b",
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000050706310",
+        "service_status": 0,
+        "name": "ilert"
+      }
+    },
+    {
+      "name": "Null0-Nu0",
+      "type": "Other",
+      "type_id": "Other",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153660",
+        "monitor_id": "47777000050153617",
+        "name": "Null0-Nu0",
+        "type": "Other",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "NVI0-NV0",
+      "type": "Other",
+      "type_id": "Other",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000046527141",
+        "monitor_id": "47777000046527108",
+        "name": "NVI0-NV0",
+        "type": "Other",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "Sanity AAG for WH",
+      "type": null,
+      "type_id": "8",
+      "status": "Active",
+      "raw": {
+        "update_send_in_json_format": true,
+        "is_poller_webhook": false,
+        "update_method": "U",
+        "close_send_in_json_format": false,
+        "encode_param": false,
+        "type": 8,
+        "alert_tags_id": [],
+        "timeout": "30",
+        "response_format": "J",
+        "service_id": "47777000051745619",
+        "send_incident_parameters": false,
+        "close_method": "G",
+        "update_url": "https://dev435335.service-now.com/api/now/table/incident/$TICKET_ID",
+        "path_expression": "$.result.sys_id",
+        "manage_tickets": true,
+        "sendClearAlerts": "0",
+        "update_send_incident_parameters": false,
+        "update_custom_parameters": {
+          "urgency": "2",
+          "impact": "2",
+          "state": "2",
+          "work_notes": "Monitor still down, investigating",
+          "priority": "2"
+        },
+        "method": "P",
+        "down_alert": true,
+        "module": "1",
+        "update_send_custom_parameters": true,
+        "problem_alert": false,
+        "attribute_group_ids": [],
+        "custom_parameters": {
+          "short_description": "$MONITORNAME Monitor is DOWN",
+          "urgency": "1",
+          "impact": "2",
+          "description": "Website is unavailable"
+        },
+        "url": "https://dev435335.service-now.com/api/now/table/incident",
+        "close_send_incident_parameters": true,
+        "selection_type": 0,
+        "send_in_json_format": true,
+        "auth_method": "B",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_status": 0,
+        "name": "Sanity AAG for WH",
+        "send_custom_parameters": true,
+        "username": "admin"
+      }
+    },
+    {
+      "name": "SDP MSP",
+      "type": null,
+      "type_id": "13",
+      "status": "Active",
+      "raw": {
+        "poller": "47777000036804003",
+        "sendClearAlerts": "0",
+        "down_alert": true,
         "subject": "$MONITORNAME is $STATUS",
-        "department_name": "pandyapallaku",
+        "poller_selection_type": "0",
         "manual_resolve": false,
-        "problem_alert": true,
-        "type": 20,
-        "alert_tags_id": [],
+        "type": 13,
+        "manual": false,
+        "url": "https://localhost:8080",
         "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000048536017",
-        "organization_id": "84903591",
+        "trouble_alert": false,
+        "critical_alert": false,
+        "service_id": "47777000049814088",
+        "account_name": "Site24x7",
         "service_status": 0,
-        "name": "Check Up Alert Closevkjfs",
-        "to_email_id": "support@pandyapallaku.localzohodesk.com"
-      }
-    },
-    {
-      "name": "HALO TEST for Sep 07",
-      "type": null,
-      "type_id": "43",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "0",
-        "down_alert": true,
-        "credential_profile_id": "47777000045833003",
-        "manual_resolve": false,
-        "problem_alert": false,
-        "type": 43,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "url": "https://salsucommoditites.haloitsm.com",
-        "selection_type": 0,
-        "credential_type": "1",
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000047763484",
-        "service_status": 0,
-        "name": "HALO TEST for Sep 07"
-      }
-    },
-    {
-      "name": "https://freshstarttapsb.haloitsm.com/",
-      "type": null,
-      "type_id": "43",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "1",
-        "down_alert": true,
-        "credential_profile_id": "47777000049549051",
-        "manual_resolve": false,
-        "problem_alert": false,
-        "type": 43,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "url": "https://freshstarttapsb.haloitsm.com",
-        "selection_type": 0,
-        "credential_type": "1",
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000049549052",
-        "service_status": 0,
-        "name": "https://freshstarttapsb.haloitsm.com/"
-      }
-    },
-    {
-      "name": "Sanity",
-      "type": null,
-      "type_id": "26",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "0",
-        "down_alert": true,
-        "sender_name": "Site24x7",
-        "type": 26,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000049617001",
-        "send_incident_parameters": true,
-        "service_status": 0,
-        "name": "Sanity"
-      }
-    },
-    {
-      "name": "Sanity DC",
-      "type": null,
-      "type_id": "21",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "1",
-        "down_alert": true,
-        "problem_alert": false,
-        "type": 21,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "channel_url": "https://web.telegram.org/a/#-1003405433403",
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000049617094",
-        "service_status": 0,
-        "name": "Sanity DC",
-        "send_custom_parameters": false
-      }
-    },
-    {
-      "name": "Sanity Pg",
-      "type": null,
-      "type_id": "1",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "1",
-        "down_alert": true,
-        "sender_name": "Site24x7",
-        "problem_alert": false,
-        "type": 1,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000049617095",
-        "send_incident_parameters": true,
-        "service_status": 0,
-        "name": "Sanity Pg"
-      }
-    },
-    {
-      "name": "Sanity Slack",
-      "type": null,
-      "type_id": "5",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "1",
-        "auth_type": "0",
-        "down_alert": true,
-        "sender_name": "Site24x7",
-        "problem_alert": false,
-        "type": 5,
-        "title": "$MONITORNAME is $STATUS",
-        "alert_tags_id": [],
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "47777000049617002",
-        "service_status": 0,
-        "name": "Sanity Slack",
-        "send_custom_parameters": false
+        "name": "SDP MSP"
       }
     },
     {
@@ -177,7 +1079,7 @@
         "sendClearAlerts": "0",
         "down_alert": true,
         "cmdb_integration": true,
-        "oauth2_provider_id": "47777000048365001",
+        "oauth2_provider_id": "47777000051391032",
         "subject": "$MONITORNAME is $STATUS",
         "module": "1",
         "manual_resolve": false,
@@ -187,9 +1089,10 @@
         "selection_type": 0,
         "portal_api_name": "itdesk",
         "trouble_alert": true,
-        "cmdb_service_id": "47777000048365003",
+        "cmdb_service_id": "47777000051391034",
         "critical_alert": true,
-        "service_id": "47777000048365005",
+        "service_id": "47777000051391036",
+        "associate_ci_id": true,
         "service_status": 0,
         "name": "ServiceDesk Plus Cloud",
         "cmdb_selection_type": "0",
@@ -198,31 +1101,190 @@
       }
     },
     {
-      "name": "Snow HALO Sanity",
+      "name": "Snow CMDB Sync",
       "type": null,
       "type_id": "11",
       "status": "Active",
       "raw": {
-        "sendClearAlerts": "0",
-        "down_alert": true,
-        "credential_profile_id": "47777000042838069",
-        "instance_url": "https://dev406429.service-now.com/",
+        "cmdb_integration": true,
+        "instance_url": "https://dev396954.service-now.com/",
         "is_incident_api": "1",
         "sender_name": "Site24x7",
-        "problem_alert": false,
         "type": 11,
         "title": "$MONITORNAME is $STATUS",
         "alert_tags_id": [],
+        "action_on_deletion": "2",
+        "cmdb_service_id": "47777000051445003",
+        "service_id": "47777000051445005",
+        "cmdb_selection_type": "0",
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "47777000051122149",
+        "problem_alert": false,
         "enable_onboarding": false,
         "selection_type": 0,
         "is_assignment_group_enabled": false,
         "credential_type": "1",
         "trouble_alert": true,
-        "critical_alert": false,
-        "service_id": "47777000046569109",
+        "critical_alert": true,
+        "associate_ci_id": true,
         "service_status": 0,
-        "name": "Snow HALO Sanity",
+        "name": "Snow CMDB Sync",
         "action_on_availability": "0"
+      }
+    },
+    {
+      "name": "TenGigabitEthernet0/0/0-Server-Farm-1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254147",
+        "monitor_id": "47777000051254125",
+        "name": "TenGigabitEthernet0/0/0-Server-Farm-1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigabitEthernet0/0/1-Server-Farm-2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254148",
+        "monitor_id": "47777000051254125",
+        "name": "TenGigabitEthernet0/0/1-Server-Farm-2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigabitEthernet0/0/2-Storage-Network",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254149",
+        "monitor_id": "47777000051254125",
+        "name": "TenGigabitEthernet0/0/2-Storage-Network",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/25-Uplink 1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452049",
+        "monitor_id": "47777000051452030",
+        "name": "TenGigE0/25-Uplink 1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/26-Uplink 2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051452043",
+        "monitor_id": "47777000051452030",
+        "name": "TenGigE0/26-Uplink 2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/49-Uplink 1",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254242",
+        "monitor_id": "47777000051254192",
+        "name": "TenGigE0/49-Uplink 1",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/50-Uplink 2",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254230",
+        "monitor_id": "47777000051254192",
+        "name": "TenGigE0/50-Uplink 2",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/51-Uplink 3",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254213",
+        "monitor_id": "47777000051254192",
+        "name": "TenGigE0/51-Uplink 3",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "TenGigE0/52-Uplink 4",
+      "type": "Ethernet",
+      "type_id": "Ethernet",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000051254245",
+        "monitor_id": "47777000051254192",
+        "name": "TenGigE0/52-Uplink 4",
+        "type": "Ethernet",
+        "interface_status": 1
+      }
+    },
+    {
+      "name": "topdesk",
+      "type": null,
+      "type_id": "45",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "credential_profile_id": "47777000050027001",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 45,
+        "title": "$MONITORNAME is $STATUS",
+        "url": "https://usatopdesktrial2.topdesk.net",
+        "selection_type": 0,
+        "caller_name": "Aaron Bennet",
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "47777000050027002",
+        "send_incident_parameters": true,
+        "service_status": 0,
+        "name": "topdesk"
+      }
+    },
+    {
+      "name": "VoIP-Null0-Vo0",
+      "type": "Other",
+      "type_id": "Other",
+      "status": "Active",
+      "raw": {
+        "interface_id": "47777000050153659",
+        "monitor_id": "47777000050153617",
+        "name": "VoIP-Null0-Vo0",
+        "type": "Other",
+        "interface_status": 1
       }
     }
   ]

@@ -149,9 +149,15 @@ def read_env_file(path):
                 continue
             k, v = line.split("=", 1)
             k, v = k.strip(), v.strip()
+            literal = False
             if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                # Single quotes mean "take it literally", exactly as in a
+                # shell. Without this a password containing $ was silently
+                # mangled by expandvars.
+                literal = v[0] == "'"
                 v = v[1:-1]
-            v = os.path.expandvars(os.path.expanduser(v))
+            if not literal:
+                v = os.path.expandvars(os.path.expanduser(v))
             env[k] = v
     return env
 

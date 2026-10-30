@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Every commit on 'main' (from the IDE Git panel or the terminal) is pushed to
+# GitHub straight away, so the next Jenkins run uses it. Jenkins downloads
+# branch 'main' from GitHub at the start of every run.
+# Skip once with:  SKIP_AUTOPUSH=1 git commit ...
+[ "${SKIP_AUTOPUSH:-}" = "1" ] && exit 0
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ "$branch" != "main" ] && exit 0
+
+echo "[auto-push] sending this commit to GitHub (Jenkins uses GitHub main) ..."
+if ! git pull -q --rebase --autostash origin main; then
+  git rebase --abort 2>/dev/null
+  echo "[auto-push] NOT PUSHED: GitHub has changes that clash with yours."
+  echo "            Run:  bash sync.sh \"merge\"   and read the message."
+  exit 0
+fi
+if git push -q origin main; then
+  echo "[auto-push] IN SYNC: GitHub (and so Jenkins) has $(git rev-parse --short HEAD)."
+else
+  echo "[auto-push] NOT PUSHED (network or GitHub login). Run:  bash sync.sh \"retry\""
+fi
+exit 0

@@ -9,16 +9,23 @@ So: **if it is pushed, Jenkins has it.** Nothing to copy, nothing to sync.
 ---
 
 ## 1. I changed the Python / JS suite code (in the IDE or anywhere)
-**Easy way — one command:**
+**Easy way — one command** (sends new AND changed files):
 ```
-cd ~/Documents/qg/"Third-Party Integrations End to End Suite" && bash sync.sh "what I changed"
+cd ~/Projects/site24x7-itsm-e2e-suite && bash sync.sh "what I changed"
 ```
 Done when it says `IN SYNC`. It refuses to send any .env / secret file.
+
+**Committing from the IDE Git panel also works:** after `bash sync.sh --install`
+(done once; `sync.sh` also does it automatically), every commit on `main` is
+pushed to GitHub on its own (`githooks/post-commit`), and any commit containing
+a secret file is blocked (`githooks/pre-commit`).
+
+**Am I in sync?** `bash sync.sh --check` (changes nothing).
 
 **Manual way** (same thing, step by step):
 
 ```
-cd ~/Documents/qg/"Third-Party Integrations End to End Suite"
+cd ~/Projects/site24x7-itsm-e2e-suite
 ```
 ```
 git add -u
@@ -46,16 +53,19 @@ git status
 - `Your branch is ahead of 'origin/main' by N commit(s)` → NOT pushed yet. Run `git push`.
 
 ## 3. I changed a password / token / .env file
-Jenkins keeps its own copy. Update it:
-1. `mkdir -p ~/jenkins-upload && cp <the .env file> ~/jenkins-upload/<name>.env`
-2. Jenkins → Manage Jenkins → Credentials → click the credential → Update → tick Replace → choose file → Save
-3. `rm ~/jenkins-upload/<name>.env`
+Jenkins keeps its own copy (secrets never go to GitHub). Update it:
+1. `python3 jenkins_secrets.py` — lists exactly which credentials changed and puts
+   ready-named copies in `~/jenkins-upload`
+2. Jenkins → Manage Jenkins → Credentials → click the credential → Update → tick Replace → choose the file with the same name → Save
+3. `python3 jenkins_secrets.py --done` — remembers them and deletes the upload copies
+
+`sync.sh` reminds you whenever Jenkins' secrets are older than the laptop's.
 
 | File on laptop | Jenkins credential |
 |---|---|
 | `accounts/<acct>/account.env` | `S247_<ACCT>_ACCOUNT_ENV` |
 | `accounts/<acct>/.itsm.env`   | `S247_<ACCT>_ITSM_ENV` |
-| `~/Documents/qg/.token.<…>.env` | `S247_<ACCT>_TOKEN_ENV` |
+| `.token.<acct>.env` (suite folder) | `S247_<ACCT>_TOKEN_ENV` |
 
 (`<ACCT>` in capitals, e.g. `S247_TPT1_ACCOUNT_ENV`)
 

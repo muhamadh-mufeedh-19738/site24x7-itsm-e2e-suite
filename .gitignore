@@ -61,3 +61,8 @@ itsm-e2e-suite/
 
 # Daily trigger-test logs (generated)
 logs/
+
+# Run output / local-only files
+accounts/*/stage0_*.json
+.jenkins_uploaded.json
+Claude outputs/

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Blocks any commit that contains a secret file (.env, token, session cookie).
+# Installed by:  bash sync.sh --install   (sets git core.hooksPath=githooks)
+bad=$(git diff --cached --name-only --diff-filter=ACMR \
+      | grep -Ei '(^|/)[^/]*\.env$|(^|/)\.session|(^|/)\.token[^/]*$|\.jenkins' \
+      | grep -Evi '\.sample$')
+if [ -n "$bad" ]; then
+  echo "STOPPED: these look like secret files and must never go to GitHub:"
+  echo "$bad" | sed 's/^/   /'
+  echo "Nothing was committed. Unstage them with:  git restore --staged <file>"
+  exit 1
+fi
+exit 0

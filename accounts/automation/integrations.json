@@ -1,35 +1,10 @@
 {
-  "captured_at": "2026-10-06T17:13:50.383Z",
+  "captured_at": "2026-10-30T14:08:49.619Z",
   "grid": "https://integrations-qa.localsite24x7.com",
   "endpoints": [
     "https://integrations-qa.localsite24x7.com/app/api/third_party_services"
   ],
   "integrations": [
-    {
-      "name": "Desk Automation",
-      "type": null,
-      "type_id": "20",
-      "status": "Active",
-      "raw": {
-        "sendClearAlerts": "0",
-        "down_alert": true,
-        "department_id": "298692000000006907",
-        "oauth2_provider_id": "73970000000110024",
-        "subject": "$MONITORNAME is $STATUS",
-        "department_name": "salsuisqueen",
-        "manual_resolve": false,
-        "problem_alert": false,
-        "type": 20,
-        "selection_type": 0,
-        "trouble_alert": true,
-        "critical_alert": true,
-        "service_id": "73970000000863001",
-        "organization_id": "125009382",
-        "service_status": 0,
-        "name": "Desk Automation",
-        "to_email_id": "support@salsuisqueen.localzohodesk.com"
-      }
-    },
     {
       "name": "Pager Duty Automation",
       "type": null,
@@ -51,6 +26,31 @@
       }
     },
     {
+      "name": "Sanity",
+      "type": null,
+      "type_id": "20",
+      "status": "Active",
+      "raw": {
+        "sendClearAlerts": "0",
+        "down_alert": true,
+        "department_id": "298692000000006907",
+        "oauth2_provider_id": "73970000000110024",
+        "subject": "$MONITORNAME is $STATUS",
+        "department_name": "salsuisqueen",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 20,
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "service_id": "73970000003904079",
+        "organization_id": "125009382",
+        "service_status": 0,
+        "name": "Sanity",
+        "to_email_id": "support@salsuisqueen.localzohodesk.com"
+      }
+    },
+    {
       "name": "ServiceDesk Plus Cloud",
       "type": null,
       "type_id": "4",
@@ -59,18 +59,17 @@
         "portal_name": "Site24x7_124304490",
         "sendClearAlerts": "0",
         "down_alert": true,
-        "oauth2_provider_id": "73970000002868055",
         "subject": "$MONITORNAME is $STATUS",
+        "oauth2_provider_id": "73970000003904075",
         "module": "1",
         "manual_resolve": false,
-        "problem_alert": false,
         "type": 4,
         "manual": false,
         "selection_type": 0,
         "portal_api_name": "itdesk",
         "trouble_alert": true,
         "critical_alert": true,
-        "service_id": "73970000002868057",
+        "service_id": "73970000003904077",
         "service_status": 0,
         "name": "ServiceDesk Plus Cloud",
         "cmdb_selection_type": "0",
@@ -86,8 +85,8 @@
       "raw": {
         "sendClearAlerts": "0",
         "down_alert": true,
-        "credential_profile_id": "73970000002743003",
-        "instance_url": "https://dev406429.service-now.com/",
+        "credential_profile_id": "73970000003958233",
+        "instance_url": "https://dev434120.service-now.com",
         "is_incident_api": "1",
         "sender_name": "Site24x7",
         "problem_alert": false,
