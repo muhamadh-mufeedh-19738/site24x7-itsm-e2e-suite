@@ -82,7 +82,7 @@ fi
 echo ""
 report_sync
 
-# Remind if Jenkins' copy of the secrets is older than the laptop's
+# Secrets: upload any changed ones to Jenkins (or remind if not set up yet)
 if [ -f jenkins_secrets.py ]; then
-  python3 jenkins_secrets.py --check --quiet || true
+  python3 jenkins_secrets.py --auto || true
 fi

@@ -19,4 +19,6 @@ if git push -q origin main; then
 else
   echo "[auto-push] NOT PUSHED (network or GitHub login). Run:  bash sync.sh \"retry\""
 fi
+# Secrets never go to GitHub; send any changed ones straight to Jenkins.
+[ -f jenkins_secrets.py ] && python3 jenkins_secrets.py --auto || true
 exit 0
