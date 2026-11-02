@@ -964,7 +964,10 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 f"closed." + gap)
     if rows_n and not failed_n and v4.startswith("REVIEW"):
         integ_l = integ.lower()
-        if "servicenow" in integ_l or "service now" in integ_l \
+        # Decide by the TOOL stage4 resolved (from CommunicationMode), not
+        # only the name: tpt's ServiceNow integration is called "Snow".
+        if (stage4_entry or {}).get("tool") == "ServiceNow" \
+                or "servicenow" in integ_l or "service now" in integ_l \
                 or "service-now" in integ_l:
             return (INCONCLUSIVE, "Ticket created; still open after recovery",
                     f"ServiceNow has this cycle's ticket(s) {tool_ids} still "
