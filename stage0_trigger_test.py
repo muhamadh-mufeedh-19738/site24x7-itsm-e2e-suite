@@ -393,7 +393,16 @@ def fire_trigger_test(grid, token, integration, dry_run=False):
     api_msg = ""
     harness_auth_gap = False
     if resp and "_exception" in resp:
-        api_msg = f"Network error: {resp['_exception']}"
+        # FIX: no HTTP answer at all (e.g. "The read operation timed out")
+        # tells us nothing about the integration. It was a FAIL, which
+        # relabelled the integration "misconfigured" -> BLOCKED and buried
+        # the lifecycle result (a real PagerDuty DEFECT on 2 Nov). It is a
+        # harness gap: SKIP, and the lifecycle evidence decides. Not
+        # retried -- if the PUT did land, a retry opens a second ticket.
+        harness_auth_gap = True
+        api_msg = (f"Network error: {resp['_exception']}. No answer reached "
+                   f"the harness, so the trigger test could not be verified "
+                   f"(NOT counted as a failure; the lifecycle decides).")
     elif resp and "_error" in resp:
         err_txt = resp["_error"]
         if "1100" in err_txt or "not authorized to perform" in err_txt.lower():
