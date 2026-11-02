@@ -714,6 +714,9 @@ def cmd_verify(args):
                 # ticket "never closed" is only a real close bug when the
                 # recovery was actually delivered.
                 rec["failed_statuses"].add(st_txt)
+                # keep the product's own error text for the developer
+                rec.setdefault("failed_reasons", {}).setdefault(
+                    st_txt, str(msg)[:200])
             op = OP_RE.search(msg)
 
             # ----------------------------------------------------------------
@@ -1251,6 +1254,7 @@ def cmd_verify(args):
                     "webmon_db_evidence": db_evidence,
                     "delivery_modes": sorted(rec.get("modes", [])),
                     "failed_statuses": sorted(rec.get("failed_statuses", [])),
+                    "failed_reasons": rec.get("failed_reasons", {}),
                     "failed_rows": rec["failed"], "verdict": verdict})
 
     section("MATCHED TICKETS (the proof)")

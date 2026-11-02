@@ -631,6 +631,10 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 f"arrived — this is a DELIVERY problem, not the tool "
                 f"ignoring a recovery. Fix delivery first; only then can "
                 f"the close behaviour be judged.")
+            reasons = stage3_entry.get("failed_reasons") or {}
+            if reasons:
+                evidence += " Error Site24x7 logged: " + "; ".join(
+                    f"{st} → {why}" for st, why in sorted(reasons.items()))
             return (bucket, headline,
                     (note + " " if note else "") + evidence + state_note
                     + caveat)
@@ -835,6 +839,34 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 f"Tool-side check reported '{v4}', so the ticket was never "
                 f"confirmed inside the destination tool.")
 
+    # --- 2b. the destination tool CONTRADICTS Site24x7 -------------------
+    # FIX (false PASS): the Alert Logs only prove Site24x7 SENT something.
+    # When the tool itself, reachable and queried correctly, has no such
+    # ticket, the customer got nothing -- that is a DEFECT, never a PASS.
+    # (Before, "Full lifecycle confirmed. Tool-side check: FAIL none found"
+    # was reported as PASS.)
+    if v4.startswith("FAIL") or v4.startswith("NOT FOUND"):
+        bucket = KNOWN if note else DEFECT
+        logged = (stage3_entry.get("created_ticket_ids")
+                  or stage3_entry.get("updated_ticket_ids") or [])
+        return (bucket,
+                "Site24x7 logged the alert, but NO ticket exists in the tool",
+                (note + " " if note else "")
+                + f"Site24x7's Alert Logs show {stage3_entry.get('rows', '?')} "
+                  f"delivery row(s) for this integration"
+                + (f" (ticket id(s) logged: {', '.join(map(str, logged))})"
+                   if logged else " with no ticket id")
+                + f", but the destination tool, queried directly, has no "
+                  f"matching ticket for this monitor in this cycle "
+                  f"(tool-side check: {v4}). The alert never became a ticket "
+                  f"for the customer.")
+
+    if v4.startswith("PARTIAL"):
+        return (INCONCLUSIVE, "Only some logged tickets exist in the tool",
+                f"Site24x7 side says: {v3 or 'no data'}. Tool-side check: "
+                f"{v4}. Open the tickets listed below in the tool to see "
+                f"which one is missing.")
+
     # --- 3. everything else ----------------------------------------------
     if v3.startswith("PASS create+close"):
         created = stage3_entry.get("created_ticket_ids") or []
@@ -908,10 +940,47 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 "Re-run with a wider --hours to capture the full lifecycle."
                 + id_note)
 
+    # Alerts were delivered (rows, no failures) but Site24x7 wrote no ticket
+    # id into its Alert Log. Stage 4 then found the ticket in the tool by
+    # this monitor's name + the cycle window, so judge on THAT evidence
+    # instead of telling the tester to "re-run" (which never helps: the id
+    # is missing from the product's log, not from our window).
+    rows_n = int(stage3_entry.get("rows") or 0)
+    failed_n = int(stage3_entry.get("failed_rows") or 0)
+    tool_ids = ", ".join(str(t.get("ticket_id"))
+                         for t in (stage4_entry or {}).get("tickets") or [])
+    gap = (" Note for developers: Site24x7 did not write the ticket id into "
+           "its Alert Log rows for this integration (no 'Operation / Ticket "
+           "Id' in the message, empty RequestMessageId), so the ticket was "
+           "found by searching the tool instead.")
+    if rows_n and not failed_n and v4 == "OK all resolved":
+        return (PASS, "Ticket created and closed (found in the tool)",
+                f"Site24x7 delivered every alert ({rows_n} row(s), 0 failed) "
+                f"and the tool shows this cycle's ticket(s) {tool_ids} "
+                f"closed." + gap)
+    if rows_n and not failed_n and v4.startswith("REVIEW"):
+        integ_l = integ.lower()
+        if "servicenow" in integ_l or "service now" in integ_l \
+                or "service-now" in integ_l:
+            return (INCONCLUSIVE, "Ticket created; still open after recovery",
+                    f"ServiceNow has this cycle's ticket(s) {tool_ids} still "
+                    f"open after the recovery alert was delivered. That is "
+                    f"CORRECT if the integration's 'Action on Recovery' is "
+                    f"Manual Close, and a DEFECT otherwise -- check that "
+                    f"setting in Site24x7 → Third-Party Integrations → "
+                    f"ServiceNow." + gap)
+        return (KNOWN if note else DEFECT,
+                "Recovery delivered, but the ticket is still OPEN",
+                (note + " " if note else "")
+                + f"Site24x7 delivered every alert ({rows_n} row(s), 0 "
+                  f"failed), but the tool still shows ticket(s) {tool_ids} "
+                  f"open after the monitor recovered." + gap)
+
     return (INCONCLUSIVE,
             f"No conclusive result ({v3 or 'no Site24x7 data'})",
-            f"Tool-side check: {v4 or 'not run'}. Re-run the cycle, or "
-            f"widen the Alert Logs window with --hours.")
+            f"Site24x7 side: {v3 or 'no data'}; tool-side check: "
+            f"{v4 or 'not run'}. Neither source proved the lifecycle. Check "
+            f"this monitor's tickets in the tool by hand.")
 
 
 def build_findings(stage3, stage4, known, live_recs=None,
@@ -1075,6 +1144,21 @@ def build_findings(stage3, stage4, known, live_recs=None,
                     f"→ Edit → Activate, then re-run the suite."
                     + (f" KNOWN: {note}" if note else "")
                 )
+            elif integ in trigger_blocked:
+                # FIX: the pre-flight already proved this integration broken,
+                # so "no rows" is explained -- it is BLOCKED, as the trigger
+                # test card says, not INCONCLUSIVE (which also left the
+                # BLOCKED tile at 0 while the card said "BLOCKED").
+                bucket = KNOWN if note else BLOCKED
+                headline = ("⛔ Pre-flight trigger test FAILED — integration "
+                            "misconfigured")
+                detail = (
+                    f"'{integ}' failed the Stage 0 pre-flight trigger test "
+                    f"(Site24x7 rejected 'Trigger Test' for it), and it then "
+                    f"produced no alert log rows in the cycle. Fix the "
+                    f"integration in Site24x7 → Third-Party Integrations → "
+                    f"Edit, press Trigger Test there until it succeeds, then "
+                    f"re-run." + (f" KNOWN: {note}" if note else ""))
             else:
                 # Active but no alert log rows — a real gap to investigate
                 bucket = KNOWN if note else INCONCLUSIVE
@@ -1311,12 +1395,15 @@ def db_evidence_html(evidence_map):
         if "SN INC#" in src:
             colour = "#0969da"   # blue — SN-specific dual-ID path
             label = "✓ SN INC# (sys_id in DB)"
-        elif src == "RequestMessageId":
+        elif src.startswith("RequestMessageId"):
+            # FIX: stage3 also writes "RequestMessageId (sys_id, ...)"; an
+            # exact == test showed those genuine DB reads as regex guesses.
             colour = "#1f883d"   # green — canonical DB field
             label = "✓ DB field"
         else:
             colour = "#9a6700"   # amber — regex fallback
             label = "⚠ regex fallback"
+            field = "Message text (RequestMessageId was empty)"
         sys_id_hint = (f" | sys_id={esc(sn_sys_id)}" if sn_sys_id else "")
         parts.append(
             f'<span title="Cassandra: {esc(field)} = {esc(str(val))} | '
@@ -1609,9 +1696,15 @@ def write_html(path, ctx):
                             break
         except Exception:  # noqa: BLE001
             _allowed_tool_keys = None
+    # Only tools that back an integration actually reported on (Stage 4
+    # named the tool per integration). Before, every tool with credentials
+    # was listed, e.g. HALO with "0 tickets" in an account with no HALO
+    # integration, which reads like a failure.
+    _reported_tools = {str(x.get("tool")) for x in f if x.get("tool")}
     if itsm_first_data:
         rows_if = ""
         for mid, data in itsm_first_data.items():
+            mon_txt = esc(data.get("monitor_text") or mid)
             for tool_result in (data.get("results") or []):
                 tool_name = tool_result.get("tool", "")
                 tool_key = tool_result.get("tool_key", "")
@@ -1619,14 +1712,22 @@ def write_html(path, ctx):
                 if (_allowed_tool_keys is not None
                         and tool_key not in _allowed_tool_keys):
                     continue
+                if _reported_tools and tool_name not in _reported_tools:
+                    continue
                 tickets = tool_result.get("tickets") or []
                 if not tool_result.get("configured"):
-                    rows_if += (f'<tr><td>{esc(tool_name)}</td>'
+                    rows_if += (f'<tr><td>{mon_txt}</td><td>{esc(tool_name)}</td>'
                                 f'<td class="mono">not configured</td>'
                                 f'<td>-</td><td>-</td></tr>')
                     continue
+                if tool_result.get("error"):
+                    rows_if += (f'<tr><td>{mon_txt}</td><td>{esc(tool_name)}</td>'
+                                f'<td class="mono bad">search failed</td>'
+                                f'<td>{esc(tool_result["error"])}</td>'
+                                f'<td>-</td></tr>')
+                    continue
                 if not tickets:
-                    rows_if += (f'<tr><td>{esc(tool_name)}</td>'
+                    rows_if += (f'<tr><td>{mon_txt}</td><td>{esc(tool_name)}</td>'
                                 f'<td class="mono">0 tickets</td>'
                                 f'<td>no tickets created in this window</td>'
                                 f'<td>-</td></tr>')
@@ -1647,12 +1748,12 @@ def write_html(path, ctx):
                                     + (f', {lag}' if lag else ""))
                     else:
                         anc_text = "no anchor"
-                    rows_if += (f'<tr><td>{esc(tool_name)}</td>'
+                    rows_if += (f'<tr><td>{mon_txt}</td><td>{esc(tool_name)}</td>'
                                 f'<td class="tid">{esc(t.get("ticket_id"))}</td>'
                                 f'<td>{esc(t.get("status",""))}</td>'
                                 f'<td>{anc_text}</td></tr>')
         itsm_first_html = (
-            f'<table><tr><th>Tool</th><th>Ticket</th><th>Status</th>'
+            f'<table><tr><th>Monitor</th><th>Tool</th><th>Ticket</th><th>Status</th>'
             f'<th>Anchored to state change</th></tr>{rows_if}</table>')
     else:
         itsm_first_html = ('<p class="note">'
@@ -2543,8 +2644,11 @@ def main():
 
         s4 = None
         if not args.report_only and not args.skip_tools:
+            # FIX: the tool-side text search must look for THIS monitor. It
+            # used args.monitor_text (default "Do Not Delete"), so it found
+            # nothing and reported "OK all resolved".
             argv = [sys.executable, script("stage4_tickets.py"), "verify",
-                    "--monitor-text", args.monitor_text]
+                    "--monitor-text", mon.get("name") or args.monitor_text]
             if cycle_since and not args.wide_window:
                 argv += ["--since", cycle_since]
                 if cycle_until:

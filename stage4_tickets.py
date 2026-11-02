@@ -42,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 import base64
 import json
 import os
+import re
 import ssl
 import sys
 import urllib.error
@@ -143,6 +144,41 @@ class Tool:
         return []
 
 
+class SearchError(Exception):
+    """A tool search could not run (HTTP error, bad request, auth).
+
+    FIX (silent failure): searches used to return [] on ANY error, so a
+    rejected request was reported as "0 tickets -- no tickets created in
+    this window". That reads as a product failure when it is our own
+    request that broke. Callers must catch this and report it as an error.
+    """
+
+
+def mentions_monitor(text, monitor_name):
+    """True when a ticket title is about THIS monitor.
+
+    A plain substring test let "New Monitor" match "New Monitor 2 is Down",
+    so one monitor's tickets were counted as another's. Site24x7 titles put
+    the monitor name first, followed by " is ...", " - ...", "(" or ":".
+    """
+    t, n = str(text or "").lower(), str(monitor_name or "").lower().strip()
+    if not n:
+        return False
+    i = t.find(n)
+    while i != -1:
+        if re.match(r"(\s+is\b|\s*[-:(\[]|\s*$)", t[i + len(n):]):
+            return True
+        i = t.find(n, i + 1)
+    return False
+
+
+CLOSED_STATES = {"closed", "resolved", "canceled", "cancelled", "completed"}
+
+
+def is_open_status(status):
+    return str(status or "").strip().lower() not in CLOSED_STATES
+
+
 # --------------------------------------------------------------- HALO ITSM
 class Halo(Tool):
     name = "HALO ITSM"
@@ -207,19 +243,19 @@ class Halo(Tool):
         """Search HALO for tickets created in this window."""
         if not self.configured():
             return []
-        ok, _ = self.connect()
+        ok, detail = self.connect()
         if not ok:
-            return []
-        since_str = since_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        until_str = until_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            raise SearchError(f"HALO not reachable: {detail}")
         st, js, raw = request(
             f"{self.url}/api/Tickets?search={urllib.parse.quote(monitor_text)}"
             f"&count=20&order=id&orderdesc=true",
             headers=self._headers())
         if st != 200 or not isinstance(js, dict):
-            return []
+            raise SearchError(f"HALO search status={st} {str(raw)[:150]}")
         out = []
         for t in (js.get("tickets") or js.get("records") or []):
+            if not mentions_monitor(t.get("summary"), monitor_text):
+                continue
             created = t.get("dateoccurred") or t.get("datecreated")
             dt, how = parse_ticket_time(created, "halo")
             if dt and (dt < since_utc or dt > until_utc):
@@ -341,9 +377,16 @@ class ServiceNow(Tool):
             f"{self.url}/api/now/table/incident?sysparm_query={q}"
             f"&sysparm_limit=20&sysparm_display_value=all",
             headers=self._headers())
-        rows = (js or {}).get("result") if isinstance(js, dict) else []
+        if st != 200 or not isinstance(js, dict):
+            raise SearchError(f"ServiceNow search status={st} {str(raw)[:150]}")
+        rows = js.get("result") or []
         out = []
-        for r in (rows or []):
+        for r in rows:
+            sd = r.get("short_description")
+            if isinstance(sd, dict):
+                sd = sd.get("display_value") or sd.get("value")
+            if not mentions_monitor(sd, monitor_text):
+                continue
             created = r.get("sys_created_on")
             if isinstance(created, dict):
                 created = created.get("value") or created.get("display_value")
@@ -437,23 +480,34 @@ class ZohoDesk(Tool):
         """Search Zoho Desk for tickets created in this window."""
         ok, detail = self._auth()
         if not ok:
-            return []
-        since_ms = int(since_utc.timestamp() * 1000)
-        until_ms = int(until_utc.timestamp() * 1000)
-        st, js, raw = request(
-            f"{self.api}/api/v1/tickets?limit=20&sortBy=createdTime"
-            f"&createdTimeRange={since_ms},{until_ms}",
-            headers=self._headers())
-        if st != 200 or not isinstance(js, dict):
-            return []
+            raise SearchError(f"Zoho Desk auth failed: {detail}")
+        # FIX: the list API rejects 'createdTimeRange' (HTTP 422), and the
+        # error was shown as "0 tickets". List newest first instead and
+        # filter by time here, paging until we are older than the window.
+        tickets = []
+        for start in range(0, 500, 100):
+            st, js, raw = request(
+                f"{self.api}/api/v1/tickets?limit=100&from={start}"
+                f"&sortBy=-createdTime",
+                headers=self._headers())
+            if st == 204:                       # no more tickets
+                break
+            if st != 200 or not isinstance(js, dict):
+                raise SearchError(f"Zoho Desk search status={st} "
+                                  f"{str(raw)[:150]}")
+            page = js.get("data") or []
+            tickets += page
+            oldest, _ = parse_ticket_time(
+                (page[-1] if page else {}).get("createdTime"), "zohodesk")
+            if len(page) < 100 or (oldest and oldest < since_utc):
+                break
         out = []
-        for t in (js.get("data") or []):
+        for t in tickets:
             subj = str(t.get("subject") or "")
-            if monitor_text.lower() not in subj.lower():
+            if not mentions_monitor(subj, monitor_text):
                 continue
             created = t.get("createdTime")
             dt, how = parse_ticket_time(created, "zohodesk")
-            # Local time filter as safety net
             if dt and (dt < since_utc or dt > until_utc):
                 continue
             out.append({"ticket_id": str(t.get("id") or ""),
@@ -588,7 +642,7 @@ class SDP(Tool):
         """Search SDP for requests created in this window."""
         ok, detail = self._auth()
         if not ok:
-            return []
+            raise SearchError(f"ServiceDesk Plus auth failed: {detail}")
         since_str = since_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         until_str = until_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         params = urllib.parse.urlencode({
@@ -614,13 +668,19 @@ class SDP(Tool):
             f"{self._base()}/requests?{params}",
             headers=self._headers())
         if st != 200 or not isinstance(js, dict):
-            return []
+            raise SearchError(f"ServiceDesk Plus search status={st} "
+                              f"{str(raw)[:150]}")
         out = []
         for r in (js.get("requests") or []):
             subj = str(r.get("subject") or "")
+            if not mentions_monitor(subj, monitor_text):
+                continue
             created = r.get("created_time") or r.get("created_date")
             if isinstance(created, dict):
-                created = created.get("display_value") or created.get("value")
+                # FIX: 'value' is exact epoch-ms. 'display_value' is the
+                # portal's LOCAL time ("Nov 2, 2026 11:49 AM" IST) and was
+                # read as UTC, pushing every ticket outside the window.
+                created = created.get("value") or created.get("display_value")
             dt, how = parse_ticket_time(created, "sdp")
             # The API's filter_by parameter is UNRELIABLE — it returned
             # Sep 16-17 tickets for a Sep 25 search. Filter locally.
@@ -686,14 +746,15 @@ class PagerDuty(Tool):
         until_str = until_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         st, js, raw = request(
             f"{self.api_url}/incidents?since={since_str}&until={until_str}"
-            f"&limit=20&sort_by=created_at:desc",
+            f"&limit=100&sort_by=created_at:desc",
             headers=self._headers())
         if st != 200 or not isinstance(js, dict):
-            return []
+            raise SearchError(f"PagerDuty search status={st} "
+                              f"{str(raw or '')[:150]}")
         out = []
         for inc in (js.get("incidents") or []):
             title = str(inc.get("title") or inc.get("summary") or "")
-            if monitor_text.lower() not in title.lower():
+            if not mentions_monitor(title, monitor_text):
                 continue
             created = inc.get("created_at")
             dt, how = parse_ticket_time(created, "pagerduty")
@@ -721,10 +782,28 @@ class PagerDuty(Tool):
             created = inc.get("created_at")
             return {"found": True, "status": status, "summary": title,
                     "created": created}
-        # Not found by direct ID — expected, since Alert Log IDs are often
-        # not PagerDuty incident IDs
-        return {"found": False,
-                "error": f"not found by id (status={st})"}
+        # FIX: the Alert Log carries the Events-API dedup_key, not the
+        # incident id, so the direct lookup above always 404'd and every
+        # PagerDuty ticket was reported "not found". PagerDuty stores the
+        # dedup_key as the incident_key, which the list API can filter on.
+        st2, js2, raw2 = request(
+            f"{self.api_url}/incidents?incident_key="
+            f"{urllib.parse.quote(str(tid))}&date_range=all"
+            f"&statuses[]=triggered&statuses[]=acknowledged"
+            f"&statuses[]=resolved",
+            headers=self._headers())
+        if st2 == 200 and isinstance(js2, dict):
+            incs = js2.get("incidents") or []
+            if incs:
+                inc = incs[0]
+                return {"found": True, "status": inc.get("status", "unknown"),
+                        "summary": str(inc.get("title") or "")[:80],
+                        "created": inc.get("created_at"),
+                        "incident_id": inc.get("id")}
+            return {"found": False,
+                    "error": "no PagerDuty incident has this dedup key"}
+        # keep "status=<code>" verbatim so a 401/403 is classed as BLOCKED
+        return {"found": False, "error": f"lookup failed status={st2}"}
 
     def search_recent(self, text, limit=10, since_hours=4):
         """Search incidents by description text within a time window."""
@@ -822,16 +901,18 @@ class TopDesk(Tool):
             st, js, raw = request(
                 f"{self.url}/tas/api/incidents?page_size=50",
                 headers=self._headers())
-        if st != 200 or not isinstance(js, list):
+        if st == 204:                           # TOPdesk: no incidents
             return []
+        if st != 200 or not isinstance(js, list):
+            raise SearchError(f"TOPdesk search status={st} {str(raw)[:150]}")
         out = []
         for inc in js:
             if not isinstance(inc, dict):
                 continue
             brief = str(inc.get("briefDescription") or "")
             request_txt = str(inc.get("request") or "")
-            haystack = (brief + " " + request_txt).lower()
-            if monitor_text.lower() not in haystack:
+            if not (mentions_monitor(brief, monitor_text)
+                    or mentions_monitor(request_txt, monitor_text)):
                 continue
             created = inc.get("creationDate")
             dt, how = parse_ticket_time(created, "topdesk")
@@ -1369,103 +1450,55 @@ def cmd_verify(args):
             continue
         if not ids:
             log("    [INFO] Alert Logs gave no ticket id for this integration")
-            # Some tools' Alert Log lines carry no usable ticket id (ServiceNow
-            # posts a work-note on UP without the number; TOPdesk can behave the
-            # same way). For those, fall back to a text search in the tool —
-            # exactly the same monitor-text matching used everywhere else.
-            if (isinstance(tool, (ServiceNow, TopDesk))
-                    and args.monitor_text):
-                st, rows = tool.search_recent(args.monitor_text, limit=10)
-                log(f"    searching {tool.name} by text "
-                    f"'{args.monitor_text}' -> status={st}, {len(rows)} row(s)")
-
-                # FIX (silent failure): a 401/500 returns zero rows, and zero
-                # rows used to fall through to "OK all resolved". A dead
-                # connection was being reported as a PASS. Never again --
-                # anything that is not a clean 200 is BLOCKED, loudly.
-                if st != 200:
-                    log(f"    [BLOCKED] ServiceNow returned status={st}. "
-                        f"This is an ACCESS problem, not a test result. "
-                        f"NOT counted as pass or fail.")
-                    out.append({"integration": integ, "tool": tool.name,
-                                "verdict": f"BLOCKED status={st}",
-                                "blocked": True,
-                                "blocker_detail": f"ServiceNow API returned "
-                                                  f"status={st} (check "
-                                                  f"SNOW_USER / SNOW_PASSWORD "
-                                                  f"in .itsm.env)"})
-                    continue
-
-                since_utc, until_utc = window_from_args(args)
-                if since_utc:
-                    log(f"    correlating against the cycle window "
-                        f"{since_utc:%Y-%m-%d %H:%M:%S} to "
-                        f"{until_utc:%Y-%m-%d %H:%M:%S} UTC")
-                else:
-                    log("    [WARN] no cycle window given, so EVERY matching "
-                        "incident is")
-                    log("           listed — including ones from earlier "
-                        "runs. Pass --since.")
-
-                # Field names differ per tool: ServiceNow uses
-                # sys_created_on/state, TOPdesk uses creationDate/status.
-                tz_key = "topdesk" if isinstance(tool, TopDesk) else "servicenow"
-                kept, skipped_old = [], 0
-                for r in rows:
-                    created = (r.get("sys_created_on")
-                               or r.get("creationDate"))
-                    if isinstance(created, dict):
-                        created = created.get("value") or created.get(
-                            "display_value")
-                    dt, how = parse_ticket_time(created, tz_key)
-                    verdict_t = in_window(dt, since_utc, until_utc)
-                    r["_created_raw"] = created
-                    r["_created_utc"] = dt.isoformat() if dt else None
-                    r["_time_read_as"] = how
-                    r["_in_window"] = verdict_t
-                    if verdict_t is False:
-                        skipped_old += 1
-                        continue
-                    kept.append(r)
-
-                if since_utc:
-                    log(f"    {len(kept)} incident(s) created in this cycle, "
-                        f"{skipped_old} from earlier runs ignored")
-                rows = kept
-
-                open_states = {"New", "In Progress", "On Hold", "Open",
-                               "1", "2", "3"}
-                still_open = 0
-                found_rows = []
-                for r in rows[:10]:
-                    # TOPdesk marks a finished incident with closed=true; its
-                    # processingStatus name is free-text per-instance, so the
-                    # boolean is the reliable signal.
-                    if isinstance(tool, TopDesk):
-                        is_open = not bool(r.get("closed"))
-                        state = str(r.get("status") or
-                                    ("closed" if r.get("closed") else "open"))
-                    else:
-                        state = str(r.get("state"))
-                        is_open = state in open_states
-                    if is_open:
-                        still_open += 1
-                    log(f"      - {r.get('number')}  state={state}"
-                        f"{'  <- STILL OPEN' if is_open else ''}  "
-                        f"{str(r.get('short_description',''))[:55]}")
-                    found_rows.append({"number": r.get("number"),
-                                       "state": state, "open": is_open})
-                if still_open:
-                    log(f"    -> {still_open} incident(s) still OPEN. If the "
-                        f"monitor has recovered, these should have closed.")
-                    verdict = f"REVIEW {still_open} still open"
-                else:
-                    verdict = "OK all resolved"
-                out.append({"integration": integ, "tool": tool.name,
-                            "verdict": verdict, "rows": found_rows})
-            else:
+            # Some Alert Log lines carry no usable ticket id (ServiceNow work
+            # notes, and Site24x7 omits the id entirely for some alert texts).
+            # Fall back to the tool itself: find this monitor's tickets
+            # created inside the cycle window.
+            #
+            # FIX: this used to search with --monitor-text, which run_all
+            # passed as "Do Not Delete" instead of the monitor name, and it
+            # reported ZERO matches as "OK all resolved" -- a PASS built on
+            # no evidence at all. Zero matches is now NOT FOUND.
+            since_utc, until_utc = window_from_args(args)
+            if not (args.monitor_text and since_utc and until_utc):
                 out.append({"integration": integ, "tool": tool.name,
                             "verdict": "NO TICKET ID IN LOGS"})
+                continue
+            try:
+                found = tool.search_by_window(
+                    args.monitor_text, since_utc, until_utc)
+            except SearchError as exc:
+                log(f"    [BLOCKED] {exc}")
+                out.append({"integration": integ, "tool": tool.name,
+                            "verdict": "BLOCKED search failed",
+                            "blocked": True,
+                            "blocker_detail": str(exc)})
+                continue
+            log(f"    searched {tool.name} for '{args.monitor_text}' "
+                f"{since_utc:%H:%M:%S}-{until_utc:%H:%M:%S} UTC -> "
+                f"{len(found)} ticket(s)")
+            checked = []
+            for t in found:
+                is_open = is_open_status(t.get("status"))
+                log(f"      - {t.get('ticket_id')}  status={t.get('status')}"
+                    f"{'  <- STILL OPEN' if is_open else ''}  "
+                    f"{str(t.get('summary', ''))[:55]}")
+                checked.append({"ticket_id": t.get("ticket_id"),
+                                "found": True, "status": t.get("status"),
+                                "summary": t.get("summary"), "open": is_open,
+                                "found_by": "tool search (no id in Alert Logs)"})
+            still_open = sum(1 for c in checked if c["open"])
+            if not checked:
+                verdict = "NOT FOUND in tool"
+            elif still_open:
+                verdict = f"REVIEW {still_open} still open"
+            else:
+                verdict = "OK all resolved"
+            out.append({"integration": integ, "tool": tool.name,
+                        "verdict": verdict, "tickets": checked,
+                        "rows": [{"number": c["ticket_id"],
+                                  "state": c["status"], "open": c["open"]}
+                                 for c in checked]})
             continue
 
         checked = []
