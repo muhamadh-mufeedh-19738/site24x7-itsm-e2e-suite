@@ -289,31 +289,32 @@ def applog_search(grid, from_dt, to_dt, query, page="1-100"):
     cookie is missing the call returns [] (graceful degradation — we
     treat it as WARN, not hard FAIL).
     """
-    fmt = "%d-%m-%Y %H:%M:%S"
-    from_str = urllib.parse.quote(from_dt.strftime(fmt), safe="")
-    to_str   = urllib.parse.quote(to_dt.strftime(fmt),   safe="")
-    q_str    = urllib.parse.quote(f'logtype="Alert Logs"', safe="")
-    path = (f"/app/api/applog/search/{from_str}/{to_str}/{page}/desc"
-            f"?time_filter=&query={q_str}&page_type=full_page")
-    url = grid.rstrip("/") + path
-    headers = {
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-        **session_headers(),
-    }
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT,
-                                    context=make_ctx()) as r:
-            raw = r.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw) if raw.strip() else {}
-            # Response shape: { "data": [ {...}, ... ] }
-            data = parsed.get("data") or []
-            if isinstance(data, list):
-                return data
-            return []
-    except Exception:
+    # FIX: this built its own URL -- ':' encoded as %3A and a narrow
+    # window -- which the endpoint rejects with HTTP 400. The error was
+    # swallowed, so EVERY test alert showed "Alert Log: not confirmed" even
+    # though the rows were written within seconds. Reuse stage3's request
+    # (browser-identical encoding, a window the endpoint accepts) and
+    # filter to the exact span here.
+    import stage3_verify as s3
+    hours = max(1, int((datetime.now(timezone.utc) - from_dt)
+                       .total_seconds() // 3600) + 1)
+    url = s3.build_url(grid.rstrip("/"), hours, query, page="1-300")
+    status, payload, raw = s3.raw_get(url, s3.build_headers(grid.rstrip("/")))
+    if status != 200:
+        log(f"    [WARN] Alert Logs read failed: HTTP {status} "
+            f"{str(raw or '')[:120]}")
         return []
+    lo, hi = from_dt.timestamp() * 1000, to_dt.timestamp() * 1000
+    rows = []
+    for e in s3.extract_entries(payload):
+        try:
+            ts = float(e.get("_zl_timestamp"))
+        except (TypeError, ValueError):
+            rows.append(e)                  # no timestamp: keep, don't hide
+            continue
+        if lo <= ts <= hi:
+            rows.append(e)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +872,15 @@ def verify_in_itsm_tools(results, monitor_text=TEST_ALERT_MONITOR_TEXT,
 
         delivery_modes = (r.get("delivery_modes")
                           or (r.get("integration") or {}).get("delivery_modes"))
+        if not delivery_modes:
+            # FIX: without modes, pick_tool fell back to the NAME, so a Zoho
+            # Desk integration named "Sanity" was called a "non-ticketing
+            # channel". The test alert's own Alert Log row says which tool
+            # it went to (CommunicationMode, e.g. 24 = Zoho Desk).
+            row = r.get("alert_log_row") or {}
+            cm = row.get("CommunicationMode") or row.get("communicationmode")
+            if cm not in (None, ""):
+                delivery_modes = [str(cm)]
         tool = s4.pick_tool(name, tools, delivery_modes)
 
         if tool is None:
