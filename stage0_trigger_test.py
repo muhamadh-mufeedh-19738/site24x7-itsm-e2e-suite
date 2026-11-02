@@ -1362,7 +1362,10 @@ def main():
 
     with open(integ_file, encoding="utf-8") as fh:
         integ_data = json.load(fh)
-    all_integrations = integ_data.get("integrations") or []
+    # Only real integration records (they carry a service_id). An older
+    # capture could hold network interfaces too; never trigger-test those.
+    all_integrations = [i for i in (integ_data.get("integrations") or [])
+                        if (i.get("raw") or {}).get("service_id")]
     log(f"\n  Integrations file: {integ_file}")
     log(f"  Integrations found: {len(all_integrations)}")
 

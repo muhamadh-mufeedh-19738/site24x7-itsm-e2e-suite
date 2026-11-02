@@ -391,11 +391,18 @@ def is_itsm(entry):
     return any(k in n for k in NAME_HINTS)
 
 
-def load_integration_records():
-    data = load_json(INTEGRATIONS_FILE)
+def _real_integrations(data):
+    """Only genuine integration records: every one has a service_id. An
+    older capture also swept in network interfaces (82 switch ports on
+    tpt1), which then showed up as 85 INCONCLUSIVE rows."""
     if not isinstance(data, dict):
-        return None
-    recs = [i for i in (data.get("integrations") or []) if i.get("name")]
+        return []
+    return [i for i in (data.get("integrations") or [])
+            if i.get("name") and (i.get("raw") or {}).get("service_id")]
+
+
+def load_integration_records():
+    recs = _real_integrations(load_json(INTEGRATIONS_FILE))
     return recs or None
 
 
@@ -408,11 +415,8 @@ def load_live_integrations():
     list has not been captured, in which case nothing is filtered and the
     report says so.
     """
-    data = load_json(INTEGRATIONS_FILE)
-    if not isinstance(data, dict):
-        return None
-    names = [str(i.get("name")) for i in (data.get("integrations") or [])
-             if i.get("name")]
+    names = [str(i.get("name"))
+             for i in _real_integrations(load_json(INTEGRATIONS_FILE))]
     return set(names) if names else None
 
 

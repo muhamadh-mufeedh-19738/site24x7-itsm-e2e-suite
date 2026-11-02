@@ -82,9 +82,9 @@ function harvest(node, found, depth) {
   const type = firstKey(node, TYPE_KEYS, { text: true });
   // An integration record has a name AND looks like an integration --
   // a bare {name: ...} could be anything on the page.
-  if (name && typeof name === 'string'
-      && (anyType !== null || node.integration_id || node.integrationid
-          || node.third_party_id || node.integration_key)) {
+  // Every real integration record carries a service_id (it is what
+  // trigger_test needs); a name + type alone also matches network ports.
+  if (name && typeof name === 'string' && node.service_id) {
     found.set(String(name), {
       name: String(name),
       type: type ? String(type) : null,
@@ -144,7 +144,12 @@ function harvest(node, found, depth) {
 
   page.on('response', async (res) => {
     const url = res.url();
-    if (!/third|integration|thirdparty/i.test(url)) return;
+    // FIX: this used to accept ANY url matching /third|integration/, so on
+    // an account with a network device the page's interface list
+    // (/app/api/network/short/interfaces) was captured too, and 82 switch
+    // ports were reported as "integrations" (tpt1, 30 Oct). Only the
+    // Integrations page's own list endpoint is accepted now.
+    if (!/\/app\/api\/third_party_services(\?|$)/.test(url)) return;
     if (res.status() !== 200) return;
     let body;
     try {
