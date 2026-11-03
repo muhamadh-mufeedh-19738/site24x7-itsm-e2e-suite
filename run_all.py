@@ -498,6 +498,15 @@ def integration_status(name, recs):
     return "deleted"
 
 
+def _host(url):
+    """'https://dev1.service-now.com/' -> 'dev1.service-now.com'."""
+    from urllib.parse import urlparse
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    return (urlparse(u if "://" in u else "https://" + u).hostname or "").lower()
+
+
 def load_known_issues():
     data = load_json(KNOWN_ISSUES)
     if not isinstance(data, dict):
@@ -1019,6 +1028,24 @@ def build_findings(stage3, stage4, known, live_recs=None,
         rec = next((r for r in (live_recs or [])
                     if str(r.get("name", "")).lower() == str(integ).lower()), None)
         notify_only = rec is not None and not is_itsm(rec)
+
+        # The suite can only read back the ServiceNow instance its .itsm.env
+        # points at. If the integration sends to a different instance, "no
+        # ticket found" is our blind spot, not a product defect (tpt1's
+        # "Snow CMDB Sync" still sent to dev396954 on 3 Nov).
+        if rec is not None and bucket in (DEFECT, INCONCLUSIVE) \
+                and (s4 or {}).get("tool") == "ServiceNow":
+            sent_to = _host((rec.get("raw") or {}).get("instance_url"))
+            checked = _host(os.environ.get("SNOW_URL"))
+            if sent_to and checked and sent_to != checked:
+                bucket = BLOCKED
+                headline = ("Integration sends to a different ServiceNow "
+                            "instance than the suite checks")
+                detail = (f"'{integ}' sends tickets to {sent_to}, but the "
+                          f"suite reads tickets from {checked} (SNOW_URL), so "
+                          f"its tickets cannot be verified. Point the "
+                          f"integration at {checked} in Site24x7 (or change "
+                          f"SNOW_URL) and re-run. Not a product verdict.")
         if notify_only and integ_st == "active" and bucket == BLOCKED \
                 and headline == "No tool-side verification configured":
             rows_n = int(e.get("rows") or 0)
