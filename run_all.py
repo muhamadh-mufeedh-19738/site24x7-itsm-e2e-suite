@@ -2658,8 +2658,13 @@ def main():
                            "cmd": [], "returncode": None, "skipped": True,
                            "error": f"integrations.json missing for account "
                                     f"'{_acct}' ({_expected})"})
-    elif args.report_only:
-        # For report-only, load the previous trigger test result if available.
+    elif args.report_only or (
+            getattr(args, "skip_trigger_test", False)
+            and (file_age_minutes(STAGE0_RESULT) or 1e9) < 90):
+        # For report-only -- and for the event-based half of itsm.py --full,
+        # which skips the trigger test it ran minutes earlier in the same run
+        # -- use that trigger test result. Without this, an integration whose
+        # trigger test FAILED was BLOCKED in one half and DEFECT in the other.
         # Same rule: only a genuine FAIL blocks; a SKIP (harness auth gap)
         # never blocks and never buries a real lifecycle PASS.
         trigger_test_data = load_json(STAGE0_RESULT)
