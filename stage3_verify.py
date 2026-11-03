@@ -893,7 +893,9 @@ def cmd_verify(args):
                         ticket_from_db = cross2
                         tid_source = ("SN INC# cross-ref via sys_id "
                                       "(late-resolve, addNotes UP row)")
-                    elif len(rec.get("create", set())) == 1:
+                    elif (len(rec.get("create", set())) == 1
+                          and ("servicenow" in rec.get("modes", set())
+                               or "14" in rec.get("modes", set()))):
                         # Last resort: exactly one created ticket for this
                         # integration — the UP work-note must be for it
                         sole = next(iter(rec["create"]))
@@ -1150,6 +1152,13 @@ def cmd_verify(args):
         # does not widen the evidence window -- it only finishes the story
         # of a ticket we already proved belongs to this cycle.
         late = 0
+        # The "sole created ticket" shortcut is ServiceNow-only: its UP
+        # work-note rows carry a sys_id and no INC#. PagerDuty keys are ALSO
+        # 32-hex, so without this guard another ticket's close row was
+        # credited to this cycle's PagerDuty incident -- a false "closed"
+        # (event-based run, 3 Nov 2026: incident still open in PagerDuty).
+        is_sn_integ = ("servicenow" in rec.get("modes", set())
+                       or "14" in rec.get("modes", set()))
         for e in globals().get("_ROWS_OUTSIDE_WINDOW", []):
             if not isinstance(e, dict):
                 continue
@@ -1184,8 +1193,9 @@ def cmd_verify(args):
                         cross_ow = _sn_sys_id_to_inc.get(raw_tid2)
                         if cross_ow:
                             ticket2 = cross_ow
-                        elif len(created) == 1:
-                            # Last resort: sole created ticket for this integ
+                        elif len(created) == 1 and is_sn_integ:
+                            # Last resort: sole created ticket for this
+                            # ServiceNow integration (see is_sn_integ)
                             ticket2 = next(iter(created))
                         else:
                             ticket2 = raw_tid2  # fall back to sys_id

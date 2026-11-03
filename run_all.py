@@ -432,7 +432,7 @@ def expected_states_for(cycle, monitor_id):
     before the first problem state sends no alert, so it is dropped."""
     seq = [str(t.get("observed_status") or "").upper()
            for t in ((cycle or {}).get("transitions") or [])
-           if str(t.get("monitor_id")) == str(monitor_id)]
+           if str(t.get("key") or t.get("monitor_id")) == str(monitor_id)]
     while seq and seq[0] == "UP":
         seq.pop(0)
     return [x for x in seq if x]
@@ -503,10 +503,10 @@ def _local_to_utc_iso(text):
         return None
 
 
-def read_itoc360(mid, since, until, fresh):
+def read_itoc360(mid, since, until, fresh, key=None):
     """Read this monitor's alerts INSIDE iTOC360 (itoc360_alerts.js) and keep
-    them in itoc360_<mid>.json. --report-only reuses the saved file."""
-    path = f"itoc360_{mid}.json"
+    them in itoc360_<key or mid>.json. --report-only reuses the saved file."""
+    path = f"itoc360_{key or mid}.json"
     s_utc = _local_to_utc_iso(since)
     if fresh and s_utc:
         argv = ["node", script("itoc360_alerts.js"), "--monitor-id", str(mid),
@@ -2472,8 +2472,26 @@ def main():
                          "have already been validated manually.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan, change nothing")
+    ap.add_argument("--events-monitor", default=None,
+                    help="EVENT-BASED mode: drive this monitor's response "
+                         "time (stage2c) instead of the keyword cycle. Its "
+                         "notification profile must be 'Notify for every "
+                         "event occurrence'.")
+    ap.add_argument("--events-profile", default=None,
+                    help="EVENT-BASED mode: dedicated threshold profile used "
+                         "only for the test (never the monitor's own)")
+    ap.add_argument("--events-routes", default="critical,trouble;trouble,critical",
+                    help="EVENT-BASED mode: routes, run one after the other")
     ap.add_argument("--out-dir", default=REPORT_DIR)
     args = ap.parse_args()
+
+    global STAGE2_RESULT
+    events_mode = bool(args.events_monitor)
+    if events_mode:
+        if not args.events_profile:
+            print("--events-monitor needs --events-profile", file=sys.stderr)
+            sys.exit(2)
+        STAGE2_RESULT = "stage2c_result.json"
 
     started_dt = datetime.now()
     started = started_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -2620,8 +2638,17 @@ def main():
                 if r.get("final_verdict") == "FAIL":
                     trigger_blocked_integrations.add(r.get("name", ""))
 
-    # ---- stage 2b -------------------------------------------------------
-    if not args.report_only and not args.skip_cycle:
+    # ---- stage 2b (keyword cycle) or 2c (event-based, response time) ----
+    if events_mode and not args.report_only and not args.skip_cycle:
+        argv = [sys.executable, script("stage2c_events.py"),
+                "--monitor-id", str(args.events_monitor),
+                "--profile-id", str(args.events_profile),
+                "--routes", args.events_routes]
+        if args.dry_run:
+            argv += ["--dry-run"]
+        stages.append(run_stage("STAGE 2C — EVENT-BASED ALERT CYCLE "
+                                "(response time)", argv, args.dry_run))
+    elif not args.report_only and not args.skip_cycle:
         argv = [sys.executable, script("stage2b_cycle.py"), "--yes"]
         if args.monitor_ids:
             argv += ["--monitor-ids", args.monitor_ids]
@@ -2693,7 +2720,13 @@ def main():
                 monitors.append({"monitor_id": str(mid),
                                  "name": m.get("name") or m.get("display_name"),
                                  "route": m.get("route"),
-                                 "type": m.get("type") or ""})
+                                 "type": m.get("type") or "",
+                                 # event-based: one entry per route, each
+                                 # verified in its own window
+                                 "key": m.get("key"),
+                                 "search_name": m.get("search_name"),
+                                 "since": m.get("since"),
+                                 "until": m.get("until")})
         if not monitors:                       # older single-monitor result
             mon = cycle.get("monitor")
             if isinstance(mon, dict):
@@ -2837,7 +2870,10 @@ def main():
             # Use THIS MONITOR'S actual name, not a static default.
             # "Do Not Delete" finds nothing when the monitor is called
             # "New Monitor".
-            search_text = mon.get("name") or args.monitor_text
+            # the REAL monitor name: an event-based route label such as
+            # "Website - RT [CRITICAL → TROUBLE → UP]" is in no ticket
+            search_text = (mon.get("search_name") or mon.get("name")
+                           or args.monitor_text)
 
             argv = [sys.executable, script("stage4_tickets.py"), "search",
                     "--monitor-text", search_text]
@@ -2949,6 +2985,11 @@ def main():
         name = mon.get("name") or mid
         mon_type = mon.get("type") or ""
         label = f"{name} ({mid})"
+        # Event-based runs verify each ROUTE of the same monitor in its own
+        # window, with its own snapshot files; keyword runs use the cycle's.
+        skey = str(mon.get("key") or mid).replace(":", "_")
+        m_since = mon.get("since") or cycle_since
+        m_until = mon.get("until") or cycle_until
 
         s3_before = os.path.getmtime(STAGE3_RESULT) \
             if os.path.isfile(STAGE3_RESULT) else None
@@ -2968,10 +3009,10 @@ def main():
                     "--monitor-id", str(mid), "--hours", str(args.hours)]
             # Scope verification to EXACTLY when the cycle ran. Anything
             # wider risks crediting an older run's ticket to this one.
-            if cycle_since and not args.wide_window:
-                argv += ["--since", cycle_since]
-                if cycle_until:
-                    argv += ["--until", cycle_until]
+            if m_since and not args.wide_window:
+                argv += ["--since", m_since]
+                if m_until:
+                    argv += ["--until", m_until]
             st3 = run_stage(f"STAGE 3 — ALERT LOGS — {label}", argv,
                             args.dry_run)
             stages.append(st3)
@@ -2997,7 +3038,7 @@ def main():
             # is a genuine problem -- but keep the fallback so a run is
             # never lost to it.
             if (not args.dry_run and rc3 is not None and rc3 >= 2
-                    and cycle_since and not args.wide_window):
+                    and m_since and not args.wide_window):
                 log(f"\n  [!! ] the exact-window request failed (exit {rc3}).")
                 log("        Retrying with the rolling window so you still")
                 log("        get a report. Results may include rows from")
@@ -3085,7 +3126,7 @@ def main():
         # against the stage2b cycle window so that a stale snapshot triggers
         # a clear warning rather than silently producing old ticket IDs.
         if args.report_only:
-            s3 = load_json(f"stage3_{mid}.json") or load_json(STAGE3_RESULT)
+            s3 = load_json(f"stage3_{skey}.json") or load_json(STAGE3_RESULT)
             # Warn loudly if the snapshot is from a different cycle
             if s3 and cycle:
                 snap_window = s3.get("window_since") or s3.get("at", "")
@@ -3113,7 +3154,7 @@ def main():
                 log(f"  [s3 ] read fresh ticket_verification.json for {mid}")
             else:
                 # Fresh file is for a different monitor — fall back to snapshot
-                s3 = load_json(f"stage3_{mid}.json")
+                s3 = load_json(f"stage3_{skey}.json")
                 if s3:
                     log(f"  [s3 ] ticket_verification.json was for monitor "
                         f"{fresh_mid!r}, not {mid!r}. Using snapshot instead.")
@@ -3133,11 +3174,12 @@ def main():
             # used args.monitor_text (default "Do Not Delete"), so it found
             # nothing and reported "OK all resolved".
             argv = [sys.executable, script("stage4_tickets.py"), "verify",
-                    "--monitor-text", mon.get("name") or args.monitor_text]
-            if cycle_since and not args.wide_window:
-                argv += ["--since", cycle_since]
-                if cycle_until:
-                    argv += ["--until", cycle_until]
+                    "--monitor-text", mon.get("search_name") or mon.get("name")
+                    or args.monitor_text]
+            if m_since and not args.wide_window:
+                argv += ["--since", m_since]
+                if m_until:
+                    argv += ["--until", m_until]
             # the anchor: this monitor's own status changes
             anchor_file = f"logreport_{mid}.json"
             if os.path.isfile(anchor_file):
@@ -3151,9 +3193,9 @@ def main():
         # Same principle as s3: for a live run always read the fresh output
         # from stage4; only use the per-monitor snapshot for --report-only.
         if args.report_only:
-            s4 = load_json(f"stage4_{mid}.json") or load_json(STAGE4_RESULT)
+            s4 = load_json(f"stage4_{skey}.json") or load_json(STAGE4_RESULT)
         else:
-            s4 = load_json(STAGE4_RESULT) or load_json(f"stage4_{mid}.json")
+            s4 = load_json(STAGE4_RESULT) or load_json(f"stage4_{skey}.json")
 
         # snapshot so the next monitor's run cannot overwrite this one.
         # IMPORTANT: only snapshot s3 if it actually belongs to THIS monitor.
@@ -3163,8 +3205,8 @@ def main():
         # already captured the correct data for monitor 1. The guard below
         # ensures a stale snapshot from a previous run (different monitor_id
         # or old timestamp) never replaces a fresh one from this run.
-        snap3 = f"stage3_{mid}.json"
-        snap4 = f"stage4_{mid}.json"
+        snap3 = f"stage3_{skey}.json"
+        snap4 = f"stage4_{skey}.json"
         if not args.dry_run:
             try:
                 # Only write the snapshot when the data is genuinely for this
@@ -3207,12 +3249,12 @@ def main():
         if itoc_names and any(str(r.get("integration")) in itoc_names
                               for r in ((s3 or {}).get("results") or [])):
             section(f"iTOC360 — READ INSIDE THE TOOL — {label}")
-            itoc = read_itoc360(mid, cycle_since, cycle_until,
+            itoc = read_itoc360(mid, m_since, m_until, key=skey,
                                 fresh=not args.report_only and not args.dry_run)
         per_monitor.append({"monitor_id": mid, "name": name,
                             "monitor_type": mon_type,
                             "blocked": False, "stage3": s3, "stage4": s4,
-                            "itoc360": itoc})
+                            "itoc360": itoc, "key": mon.get("key")})
 
     if args.dry_run:
         section("DRY RUN COMPLETE")
@@ -3342,7 +3384,7 @@ def main():
                                   trigger_blocked=trigger_blocked_integrations,
                                   scope=scope,
                                   expected_states=expected_states_for(
-                                      cycle, pm["monitor_id"]),
+                                      cycle, pm.get("key") or pm["monitor_id"]),
                                   itoc360=pm.get("itoc360")):
             # DELETED integrations: they appear in alert log history but
             # no longer exist in integrations.json. Do NOT silently drop
@@ -3495,9 +3537,10 @@ def main():
     }
 
     os.makedirs(args.out_dir, exist_ok=True)
-    html_path = os.path.join(args.out_dir, f"report_{stamp}.html")
-    json_path = os.path.join(args.out_dir, f"report_{stamp}.json")
-    xml_path = os.path.join(args.out_dir, f"junit_{stamp}.xml")
+    prefix = "events_" if events_mode else ""
+    html_path = os.path.join(args.out_dir, f"{prefix}report_{stamp}.html")
+    json_path = os.path.join(args.out_dir, f"{prefix}report_{stamp}.json")
+    xml_path = os.path.join(args.out_dir, f"{prefix}junit_{stamp}.xml")
 
     write_html(html_path, ctx)
     with open(json_path, "w", encoding="utf-8") as fh:
