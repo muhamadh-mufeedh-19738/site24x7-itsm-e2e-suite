@@ -326,6 +326,46 @@ def compare(cur, prev):
     return out
 
 
+def bucket_counts(snap):
+    c = {b: 0 for b in ORDER}
+    for r in (snap.get("results") or {}).values():
+        c[r["bucket"]] = c.get(r["bucket"], 0) + 1
+    return c
+
+
+def short_time(started):
+    try:
+        return datetime.strptime(started, "%Y-%m-%d %H:%M:%S").strftime("%d %b %H:%M")
+    except (TypeError, ValueError):
+        return str(started or "")
+
+
+def streak(key, runs, want):
+    """How many runs in a row, ending with the newest in `runs`, had this
+    result in bucket `want`; and when that streak started."""
+    n, since = 0, None
+    for r in reversed(runs):
+        res = (r.get("results") or {}).get(key)
+        if not res or res["bucket"] != want:
+            break
+        n, since = n + 1, r.get("started")
+    return n, since
+
+
+def flaky(cur, runs, window=6):
+    """Results that flipped between Pass and Defect at least twice in the
+    last `window` runs (this run included)."""
+    hist = (runs + [cur])[-window:]
+    out = []
+    for k in cur["results"]:
+        seq = [(r.get("results") or {}).get(k, {}).get("bucket") for r in hist]
+        seq = [b for b in seq if b in (PASS, DEFECT)]
+        flips = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
+        if flips >= 2:
+            out.append((k, seq))
+    return out
+
+
 def counts_line(d):
     return (f'{len(d["new"])} new problem(s), {len(d["fixed"])} fixed, '
             f'{len(d["still"])} still failing')
@@ -337,12 +377,50 @@ def diff_html(cur, runs):
         return ("<p class=\"muted\">No previous run of this account on this grid "
                 "to compare with. The next run will show what changed.</p>", "first run - nothing to compare")
     d = compare(cur, prev)
+    hist = runs + [cur]
     same_build = cur["build"] and cur["build"] == prev.get("build")
     btxt = (f'Build {esc(prev.get("build"))} → {esc(cur["build"])}' if cur["build"] and prev.get("build")
             and not same_build else "same build, re-run" if same_build
             else "build not recorded for a local run")
     head = (f'<div class="dhd">Compared with the previous run: <b>{esc(prev.get("started"))}</b> · {btxt}'
             f' · time {esc(prev.get("total"))} → {esc(cur["total"])}</div>')
+    nn, nf = len(d["new"]), len(d["fixed"])
+    if nn and nn >= nf:
+        verdict = ("worse", "✗ Worse than the last run",
+                   f"{nn} new problem{'s' if nn != 1 else ''}" + (f", {nf} fixed" if nf else ""))
+    elif nf:
+        verdict = ("better", "✓ Better than the last run",
+                   f"{nf} fixed" + (f", {nn} new problem{'s' if nn != 1 else ''}" if nn else ", no new problems"))
+    else:
+        verdict = ("same", "= Same as the last run",
+                   f"no new problems, nothing fixed, {len(d['still'])} still failing")
+    ca, cb = bucket_counts(prev), bucket_counts(cur)
+
+    def delta(b, good_up):
+        x, y = ca.get(b, 0), cb.get(b, 0)
+        diff = y - x
+        cls = "dz" if diff == 0 else ("dg" if (diff > 0) == good_up else "dr")
+        sign = f"+{diff}" if diff > 0 else (str(diff) if diff else "±0")
+        return (f'<div class="dc"><span class="l">{WORD[b]}</span>'
+                f'<span class="n">{x} → <b>{y}</b></span> <span class="{cls}">{sign}</span></div>')
+    counts_html = ('<div class="dcs">' + delta(PASS, True) + delta(DEFECT, False)
+                   + delta(BLOCKED, False) + delta(KNOWN, False) + "</div>")
+    # history strip: defects per run, last 8 runs, this run highlighted
+    last = hist[-8:]
+    peak = max([bucket_counts(r)[DEFECT] for r in last] + [1])
+    bars = ""
+    for i, r in enumerate(last):
+        n = bucket_counts(r)[DEFECT]
+        now = i == len(last) - 1
+        h = max(3, round(48 * n / peak)) if n else 2
+        bars += (f'<div class="hb{" now" if now else ""}" title="{esc(r.get("started"))}: '
+                 f'{n} defect(s)"><span class="hv">{n}</span><span class="hbar" '
+                 f'style="height:{h}px"></span><span class="ht">'
+                 f'{"this run" if now else esc(short_time(r.get("started")))}</span></div>')
+    strip = (f'<div class="hist"><div class="hl">Defects per run (last {len(last)} runs)</div>'
+             f'<div class="hbs">{bars}</div></div>')
+    head = (f'<div class="dverdict {verdict[0]}"><b>{verdict[1]}</b> — {esc(verdict[2])}</div>'
+            + head + f'<div class="dtop">{counts_html}{strip}</div>')
 
     def label(k):
         r = cur["results"].get(k) or prev["results"].get(k) or {}
@@ -351,8 +429,23 @@ def diff_html(cur, runs):
         return (f'<b>{esc(r.get("integration"))}</b> <span class="muted">· {esc(r.get("mode"))} · '
                 f'{esc(r.get("scenario"))}</span>')
 
+    def age(k, cls):
+        if cls == "warnc":            # still failing: how long
+            n, since = streak(k, hist, DEFECT)
+            return (f' <span class="age">failing {n} runs in a row, since '
+                    f'{esc(short_time(since))}</span>') if n > 1 else ""
+        if cls == "ok":               # fixed: how long it had been failing
+            n, since = streak(k, runs, DEFECT)
+            return (f' <span class="age">after {n} failing run{"s" if n != 1 else ""}'
+                    f'</span>') if n else ""
+        if cls == "bad":              # new: was it fine for long?
+            n, _ = streak(k, runs, PASS)
+            return (f' <span class="age">was passing for {n} run{"s" if n != 1 else ""}'
+                    f'</span>') if n else ""
+        return ""
+
     def item(k, change, flips, cls):
-        return (f'<li>{label(k)} <span class="{cls}">{esc(change)}</span>'
+        return (f'<li>{label(k)} <span class="{cls}">{esc(change)}</span>{age(k, cls)}'
                 + (f' <span class="muted small">{esc("; ".join(flips))}</span>' if flips else "") + "</li>")
     body = ""
     for key, title, cls in (("new", "New problems", "bad"), ("fixed", "Fixed", "ok"),
@@ -361,6 +454,13 @@ def diff_html(cur, runs):
         body += (f'<div class="dgrp"><div class="dt {cls}">{title} ({len(rows)})</div>'
                  + (f'<ul class="dl">{"".join(item(k, c, fl, cls) for k, c, _, fl in rows)}</ul>'
                     if rows else '<div class="muted small">none</div>') + "</div>")
+    fl_rows = flaky(cur, runs)
+    if fl_rows:
+        body += ('<div class="dgrp"><div class="dt warnc">Unstable — flips between pass and fail '
+                 f'({len(fl_rows)})</div><ul class="dl">'
+                 + "".join(f'<li>{label(k)} <span class="muted small">'
+                           f'{esc(" → ".join(WORD[b] for b in seq))}</span></li>' for k, seq in fl_rows)
+                 + '</ul><div class="muted small">Re-run before raising a bug for these.</div></div>')
     extra = [f'{label(k)}: {esc("; ".join(fl))}' for k, _, _, fl in d["states"]]
     extra += [f'{label(k) if k in cur["results"] or k in prev["results"] else esc(k)}: {esc(c)}'
               for k, c, _ in d["other"]]
@@ -448,6 +548,23 @@ summary{cursor:pointer;padding:10px 14px}details[open] summary{border-bottom:1px
 .dgrp{min-width:0}.dt{font-weight:700;font-size:13px;margin-bottom:4px}
 .dl{margin:0;padding-left:18px;font-size:12.5px}.dl li{margin:3px 0}
 .dbl{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px}
+.dverdict{font-size:15px;padding:8px 12px;border-radius:8px;margin-bottom:10px}
+.dverdict.better{background:var(--passbg);color:var(--pass)}
+.dverdict.worse{background:var(--defbg);color:var(--def)}
+.dverdict.same{background:var(--knbg);color:var(--kn)}
+.dtop{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-end;margin-bottom:14px}
+.dcs{display:flex;flex-wrap:wrap;gap:8px}
+.dc{border:1px solid var(--line);border-radius:8px;padding:6px 10px;min-width:110px;font-variant-numeric:tabular-nums}
+.dc .l{display:block;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.dc .n{font-size:14px}.dg{color:var(--pass);font-weight:700}.dr{color:var(--def);font-weight:700}
+.dz{color:var(--mut)}
+.age{font-size:11.5px;color:var(--mut);font-style:italic}
+.hist{min-width:0}.hl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.hbs{display:flex;gap:6px;align-items:flex-end}
+.hb{display:flex;flex-direction:column;align-items:center;gap:2px;font-variant-numeric:tabular-nums}
+.hbar{width:22px;background:var(--defbg);border:1px solid var(--def);border-radius:4px 4px 0 0;opacity:.75}
+.hb.now .hbar{background:var(--def);opacity:1}
+.hv{font-size:11px;color:var(--ink)}.ht{font-size:10px;color:var(--mut);white-space:nowrap}
 """
 
 
