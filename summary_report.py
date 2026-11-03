@@ -200,14 +200,20 @@ def details(reps, recs):
                 for s in st)
             tool = ""
             for t in f.get("tool_tickets") or []:
-                tool += (f'<code>{esc(t.get("ticket_id"))}</code> in {esc(f.get("tool"))}: '
-                         f'{esc(t.get("status") or t.get("error") or ("found" if t.get("found") else "not found"))}; ')
+                tname = esc(f.get("tool") or "the tool")
+                if t.get("found") is False:
+                    state = (f'<span class="bad">NOT found in {tname}</span>'
+                             + (f' ({esc(t.get("error"))})' if t.get("error") else ""))
+                else:
+                    state = f'Status in {tname}: <b>{esc(t.get("status") or "found")}</b>'
+                tool += (f'<div class="tk">Ticket ID: <code>{esc(t.get("ticket_id"))}</code>'
+                         f' · {state}</div>')
             body += (f'<div class="dsc"><div class="dh"><span class="v v-{f["bucket"]}">'
                      f'{ICON[f["bucket"]]} {WORD[f["bucket"]]}</span> '
                      f'{"Event-based" if kind == "events" else "Consolidated"} · '
                      f'{esc(f.get("monitor"))}</div>'
                      f'<div class="small">{esc(f.get("headline"))}</div>'
-                     + (f'<div class="small muted">Inside the tool: {tool}</div>' if tool else "")
+                     + (f'<div class="small">{tool}</div>' if tool else "")
                      + (f'<table class="st-t"><tr><th>State</th><th>Time</th>'
                         f'<th>What Site24x7 / the tool recorded</th><th></th></tr>{trs}</table>'
                         if trs else "")
@@ -244,6 +250,16 @@ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial
 h1{font-size:22px;margin:0}h2{font-size:15px;margin:26px 0 10px;text-transform:uppercase;
 letter-spacing:.06em;color:var(--mut)}
 .sub{color:var(--mut);margin:4px 0 16px;font-size:13px}
+html{scroll-behavior:smooth}h2{scroll-margin-top:12px}
+.meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 18px;background:var(--card);
+border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:10px 0 14px;font-size:13.5px}
+.meta div{overflow-wrap:anywhere}.meta span{display:block;font-size:11px;color:var(--mut);
+text-transform:uppercase;letter-spacing:.05em}.meta small{display:block;color:var(--mut);font-size:11.5px}
+.meta .wide{grid-column:1/-1}.meta em{color:var(--mut);font-style:normal;font-size:12px}
+@media(max-width:700px){.meta{grid-template-columns:1fr 1fr}}
+a.tile{color:inherit;text-decoration:none;transition:box-shadow .12s,transform .12s}
+a.tile:hover{box-shadow:0 2px 8px rgba(0,0,0,.08);transform:translateY(-1px)}
+.tile .go{font-size:11px;color:#0b62c4;margin-top:2px}.tile.zero{opacity:.55}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
 .banner{border-radius:10px;padding:16px 20px;color:#fff;font-size:17px;font-weight:600}
 .banner small{display:block;font-weight:400;font-size:13px;opacity:.92;margin-top:2px}
@@ -277,7 +293,7 @@ padding:1px 5px;word-break:break-all;display:inline-block;margin:3px 4px 0 0}
 details{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
 summary{cursor:pointer;padding:10px 14px}details[open] summary{border-bottom:1px solid var(--line)}
 .dsc{padding:10px 14px;border-bottom:1px dashed var(--line)}.dsc:last-child{border:0}
-.dh{margin-bottom:3px}.st-t{margin-top:6px;font-size:12.5px}
+.dh{margin-bottom:3px}.tk{margin-top:3px}.tk code{margin:0 2px}.st-t{margin-top:6px;font-size:12.5px}
 .st-t th,.st-t td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
 .mono{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
 .foot{color:var(--mut);font-size:12px;margin-top:26px}
@@ -297,8 +313,27 @@ def build(cons, evts, account, out_path):
            BLOCKED: "Some checks could not run — not a product verdict",
            PASS: "Every integration worked for every state"}[health]
     grid = next(((r or {}).get("env") or {}).get("grid") for _, r in reps if r) or ""
-    started = min((r.get("started") for _, r in reps if r), default="")
-    dur = " + ".join(r.get("duration") or "" for _, r in reps if r)
+    # Wall-clock: first start to last finish (the event cycle may run in
+    # parallel with the consolidated run, so the parts must not be added).
+    fmt = "%Y-%m-%d %H:%M:%S"
+    starts = [r.get("started") for _, r in reps if r and r.get("started")]
+    ends = [r.get("finished") for _, r in reps if r and r.get("finished")]
+    cyc_ev = ((evts or {}).get("cycle") or {}).get("started_at")
+    if cyc_ev:
+        starts.append(cyc_ev.replace("T", " ")[:19])
+    started = min(starts) if starts else ""
+    finished = max(ends) if ends else ""
+    try:
+        secs = int((datetime.strptime(finished, fmt)
+                    - datetime.strptime(started, fmt)).total_seconds())
+        total = f"{secs // 60}m {secs % 60:02d}s"
+    except ValueError:
+        total = "—"
+    parts = " · ".join(f'{"consolidated" if k == "consolidated" else "event-based"} '
+                       f'{r.get("duration")}' for k, r in reps if r and r.get("duration"))
+    mon_c = ", ".join(c["title"] for c in scenarios(cons, "consolidated"))
+    mon_e = ", ".join(sorted({c["title"] for c in scenarios(evts, "events")}))
+    user = os.environ.get("S247_LOGIN_USER") or "—"
 
     attn = ""
     for f in sorted((f for f in findings if f["bucket"] in (DEFECT, BLOCKED, INCONC)),
@@ -331,31 +366,47 @@ def build(cons, evts, account, out_path):
                          else '<span class="bad">NOT confirmed restored — check by hand</span>')
                       for k, r in reps if r)
 
-    tiles = "".join(f'<div class="tile"><div class="n" style="color:var(--{c})">'
-                    f'{counts[b]}</div><div class="l">{WORD[b]}</div></div>'
-                    for b, c in ((PASS, "pass"), (DEFECT, "def"), (BLOCKED, "blk"),
-                                 (KNOWN, "kn")))
+    # Each tile jumps to where those results are (plain links: Jenkins'
+    # report viewer blocks JavaScript).
+    target = {PASS: "consolidated", DEFECT: "attention", BLOCKED: "attention",
+              KNOWN: "details"}
+    tiles = ""
+    for b, c in ((PASS, "pass"), (DEFECT, "def"), (BLOCKED, "blk"), (KNOWN, "kn")):
+        inner = (f'<div class="n" style="color:var(--{c})">{counts[b]}</div>'
+                 f'<div class="l">{WORD[b]}</div>')
+        tiles += (f'<a class="tile" href="#{target[b]}">{inner}'
+                  f'<div class="go">view &darr;</div></a>' if counts[b] else
+                  f'<div class="tile zero">{inner}</div>')
     doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Integrations — {esc(account)} — {esc(started)}</title><style>{CSS}</style></head>
 <body><div class="wrap">
 <h1>Third-Party Integrations — {esc(account)}</h1>
-<div class="sub">{esc(grid)} · run {esc(started)} · {esc(dur)}</div>
+<div class="meta">
+<div><span>Build deployed in</span>{esc(grid) or "—"}</div>
+<div><span>Account</span>{esc(account) or "—"}</div>
+<div><span>User</span>{esc(user)}</div>
+<div><span>Started</span>{esc(started) or "—"}</div>
+<div><span>Finished</span>{esc(finished) or "—"}</div>
+<div><span>Total time</span>{esc(total)}<small>{esc(parts)}</small></div>
+<div class="wide"><span>Monitors</span>{esc(mon_c) or "—"} <em>(consolidated)</em>
+{(" · " + esc(mon_e) + " <em>(event-based)</em>") if mon_e else ""}</div>
+</div>
 <div class="banner b-{health}">{ICON[health]} {WORD[health].upper()} — {esc(msg)}
 <small>Consolidated alerts (monitor level) and event-based alerts (every event), each checked state by state.</small></div>
 <div class="tiles">{tiles}</div>
 
-<h2>Needs attention</h2><div class="card">{attn}</div>
+<h2 id="attention">Needs attention</h2><div class="card">{attn}</div>
 
 <h2>Trigger tests</h2><div class="tts">{trigger_tests(cons or evts)}</div>
 
-<h2>Consolidated alerts — monitor level</h2>
+<h2 id="consolidated">Consolidated alerts — monitor level</h2>
 <div class="card">{matrix(cons, "consolidated", recs) or '<p class="muted">Not run.</p>'}</div>
 
-<h2>Event-based alerts — every event occurrence</h2>
+<h2 id="events">Event-based alerts — every event occurrence</h2>
 <div class="card">{matrix(evts, "events", recs) or '<p class="muted">Not run.</p>'}</div>
 
-<h2>Details</h2>{details(reps, recs)}
+<h2 id="details">Details</h2>{details(reps, recs)}
 
 <div class="foot">{rest}<br>
 ✓ Pass · ✗ Defect (product problem) · ! Blocked (our access/setup, not a product verdict) ·
@@ -382,7 +433,13 @@ def main():
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = os.path.join(a.out_dir, f"summary_report_{stamp}.html")
     health = build(cons, evts, a.account, out)
+    # A FIXED name as well, so one bookmarked link always opens the newest.
+    latest_copy = os.path.join(a.out_dir, "latest_summary.html")
+    with open(out, encoding="utf-8") as src, \
+            open(latest_copy, "w", encoding="utf-8") as dst:
+        dst.write(src.read())
     print(f"  [OK] summary report: {os.path.abspath(out)}  (health {health})")
+    print(f"  [OK] latest link   : file://{os.path.abspath(latest_copy)}")
     return 0
 
 
