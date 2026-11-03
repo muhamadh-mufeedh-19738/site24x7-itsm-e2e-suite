@@ -1019,9 +1019,11 @@ MODE_INT_TO_TOOL = {
     24: "zohodesk",     # ZDESK — Zoho Desk
     52: "halo",         # HaloITSM
     54: "topdesk",      # TOPdesk (CommunicationMode seen live on the QA grid)
-    15: "opsgenie",     # OpsGenie (no adapter yet)
-    23: "jira",         # Jira (no adapter yet)
-    29: "freshservice", # FreshService (no adapter yet)
+    # Corrected 3 Nov 2026 from Web_Mon ThirdPartyServices.java alertType
+    # (were 15 / 23 / 29, which are other tools). Must match stage3's table.
+    13: "opsgenie",     # OpsGenie (no adapter yet)
+    20: "jira",         # Jira (no adapter yet)
+    26: "freshservice", # FreshService (no adapter yet)
 }
 
 # String-based fallback — used when CommunicationMode is absent or non-int.
@@ -1061,7 +1063,7 @@ NON_TICKETING_MODES = {
     "custom webhook", "webhook", "zoho cliq", "cliq", "alarmsone",
     "email", "sms", "voice call", "slack", "microsoft teams",
     "google chat", "telegram", "connectwise", "analytics plus",
-    "google cloud pub/sub", "application manager",
+    "google cloud pub/sub", "application manager", "discord",
 }
 
 

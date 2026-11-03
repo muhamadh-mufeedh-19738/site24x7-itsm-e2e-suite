@@ -100,22 +100,9 @@ SN_SYS_ID_RE = re.compile(r"\b([0-9a-f]{32})\b", re.I)  # 32-char hex UUID
 # exactly what the product writes.  We read RequestMessageId first and
 # fall back to the regex on Message only when the field is absent.
 #
-# CommunicationMode integer → integration type (from ThirdPartyServices enum
-# in AlertLogs.java → getAlertModeName()):
-#   5  = AlarmsOne        6  = SDPOD (ServiceDesk Plus OD)
-#   7  = Slack            8  = Slack (alt)       9  = PagerDuty
-#   10 = SDP on-premise   11 = Custom Webhook    13 = Microsoft Teams
-#   14 = ServiceNow       15 = OpsGenie          17 = iLert
-#   18 = JSM Ops          19 = SDPMSP            21 = ConnectWise
-#   22 = Zapier           23 = Jira              24 = Zoho Desk (ZDESK)
-#   25 = Zoho Cliq        26 = EventBridge       27 = Telegram
-#   29 = FreshService     30 = VictorOps         31 = FreshDesk
-#   32 = Zendesk          33 = Discord           52 = HaloITSM
-#
-# CORRECTION (3 Nov 2026): Discord is 30, not 33. Web_Mon
-# ThirdPartyServices.java: DISCORD(26, ..., alertType 30), and the
-# automation account's Alert Logs show communicationmode=30 for
-# 'Discord Sanity'. Slack = 7 is confirmed the same way.
+# CommunicationMode integer → integration type. The full, checked list
+# is MODE_INT_TO_TOOL below (source: Web_Mon ThirdPartyServices.java,
+# alertType argument). An unknown code is logged as [WARN] at run time.
 #
 # To field: written by AlertLogs.addAlertLogToApplog():
 #     tpJsonArray.add(prop.get("integration_name"));
@@ -128,31 +115,42 @@ SN_SYS_ID_RE = re.compile(r"\b([0-9a-f]{32})\b", re.I)  # 32-char hex UUID
 # ---------------------------------------------------------------------------
 
 MODE_INT_TO_TOOL = {
+    # CHECKED 3 Nov 2026 against Web_Mon ThirdPartyServices.java, the 4th
+    # constructor argument (alertType) -- that is the number the product
+    # writes as CommunicationMode. The table above this one had several
+    # wrong (Discord 33, Teams 13, Cliq 25, Telegram 27, iLert 17...).
+    # 52 and 54 are not in that enum (they come from s247_Integrations) and
+    # were confirmed from live Alert Logs on the QA grid.
     5:  "alarmsone",
-    6:  "sdp",          # SDPOD — ServiceDesk Plus On Demand
-    7:  "slack",
+    6:  "sdp",          # SDPOD — ServiceDesk Plus Cloud
+    7:  "slack",        # live: Slack Sanity rows
     9:  "pagerduty",
     10: "sdp_onprem",
     11: "webhook",
-    13: "msteams",
+    12: "msteams",
+    13: "opsgenie",
     14: "servicenow",
-    15: "opsgenie",
-    17: "ilert",
-    18: "jsmops",
-    19: "sdpmsp",
-    21: "connectwise",
-    22: "zapier",
-    23: "jira",
+    16: "sdpmsp",
+    17: "zapier",
+    18: "connectwise",
+    20: "jira",
+    21: "moogsoft",
+    22: "zcliq",
+    23: "eventbridge",
     24: "zohodesk",     # ZDESK
-    25: "zcliq",
-    26: "eventbridge",
-    27: "telegram",
-    29: "freshservice",
-    30: "victorops",
-    31: "freshdesk",
-    30: "discord",      # live: Discord Sanity rows (was 33, wrong)
-    32: "zendesk",
-    52: "haloitsm",
+    25: "telegram",
+    26: "freshservice",
+    27: "victorops",
+    28: "freshdesk",
+    29: "zendesk",
+    30: "discord",      # live: Discord Sanity rows
+    31: "bigpanda",
+    34: "google_pubsub",
+    45: "ilert",
+    46: "jsmops",
+    50: "sdp_msp_cloud",
+    52: "haloitsm",     # live
+    54: "topdesk",      # live
 }
 
 # Ticket IDs that are obviously not real IDs and must be discarded.
@@ -652,6 +650,7 @@ def cmd_verify(args):
                 _sn_sys_id_to_inc[_raw] = _sn.group(1).upper()
 
     per = {}
+    _warned_modes = set()
     for e in rows:
         # ------------------------------------------------------------------
         # WEB_MON ALIGNMENT — AlertLogs.java field names (canonical casing)
@@ -702,6 +701,12 @@ def cmd_verify(args):
                 tool_key = MODE_INT_TO_TOOL.get(comm_mode_int)
                 if tool_key:
                     rec["modes"].add(tool_key)           # human-readable too
+                elif comm_mode_int not in _warned_modes:
+                    _warned_modes.add(comm_mode_int)
+                    log(f"  [WARN] unknown CommunicationMode "
+                        f"{comm_mode_int} for {dest!r} -- add it to "
+                        f"MODE_INT_TO_TOOL (stage3) after checking "
+                        f"Web_Mon ThirdPartyServices.java")
             else:
                 for k in ("CommunicationMode", "communicationmode",
                           "alert_mode", "alertmode"):
