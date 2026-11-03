@@ -61,6 +61,7 @@ import argparse
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -311,7 +312,8 @@ INTEGRATIONS_FILE = "integrations.json"
 # just cannot open the destination and read the ticket back.
 ITSM_VERIFIABLE = ("servicenow", "service-now", "snow", "zoho desk",
                    "zohodesk", "servicedesk plus", "sdp", "haloitsm",
-                   "halo itsm", "halo", "pagerduty", "topdesk", "top desk")
+                   "halo itsm", "halo", "pagerduty", "topdesk", "top desk",
+                   "itoc360")
 
 
 # Site24x7 returns the third-party app as a NUMERIC id and its own UI
@@ -338,13 +340,22 @@ APP_IDS = {
     "21": "Telegram",
     "26": "Discord",
     "9": "Microsoft Teams",
+    # New framework (s247_Integrations ServiceType / integration-template),
+    # confirmed live on the automation account 3 Nov 2026.
+    "46": "Mattermost",
+    "47": "iTOC360",
 }
 
 # COLLABORATION tools: they post a message for every state change and never
 # create a ticket. Each state the monitor went through (TROUBLE, DOWN, UP)
 # must have its own delivery row, so a missing TROUBLE alert is a defect even
 # when DOWN and UP arrived. Decided by the app type, never the name.
-COLLAB_APPS = ("Slack", "Discord", "Microsoft Teams", "Zoho Cliq", "Telegram")
+# Site24x7's own reference for a delivery when the tool's ticket id is not
+# stored: WH_<service_id>_<epoch ms>. Never a ticket number in the tool.
+INTERNAL_REF_RE = re.compile(r"^WH_\d+_\d+$")
+
+COLLAB_APPS = ("Slack", "Discord", "Microsoft Teams", "Zoho Cliq", "Telegram",
+               "Mattermost")
 
 
 def app_ids():
@@ -1180,6 +1191,32 @@ def build_findings(stage3, stage4, known, live_recs=None,
                           f"Site24x7's Alert Logs show {failed_n} FAILED delivery "
                           f"row(s) out of {rows_n} in this cycle, so some alerts "
                           f"did not reach it.")
+        # FALSE-PASS GUARD: an ITSM integration that does not store the
+        # tool's ticket id (iTOC360: store_request_id=false) gets a Site24x7
+        # INTERNAL reference in the Alert Log, "WH_<service_id>_<time>". It is
+        # not a ticket number in the tool, so it proves only that Site24x7
+        # sent the alert. Without a read-back inside the tool that is never a
+        # PASS (iTOC360 was reported PASS this way on 3 Nov 2026).
+        ref_ids = (list(e.get("created_ticket_ids") or [])
+                   + list(e.get("updated_ticket_ids") or []))
+        tool_v = str((s4 or {}).get("verdict") or "").upper()
+        if rec is not None and is_itsm(rec) and bucket == PASS and ref_ids \
+                and all(INTERNAL_REF_RE.match(str(t)) for t in ref_ids) \
+                and (not tool_v or "NO ADAPTER" in tool_v
+                     or "NOT CONFIGURED" in tool_v):
+            app_nm = app_label(rec)
+            bucket = BLOCKED
+            headline = (f"Sent to {app_nm}, but NOT yet confirmed inside "
+                        f"{app_nm}")
+            detail = (f"Site24x7's Alert Logs show the alerts were sent to "
+                      f"'{integ}' ({', '.join(sorted(e.get('statuses_seen') or []))}) "
+                      f"with no failures. But {app_nm} does not return its "
+                      f"ticket number to Site24x7, so the Alert Log only "
+                      f"holds Site24x7's own internal reference "
+                      f"({', '.join(sorted(set(ref_ids)))}), not a {app_nm} "
+                      f"ticket. Whether the ticket was created and resolved "
+                      f"inside {app_nm} has not been checked. Needs read "
+                      f"access to {app_nm} to verify. Not a product verdict.")
         # COLLABORATION (Slack, Discord, ...): any delivery row was enough
         # above. Here every state the monitor went through must have its own
         # successful delivery, so a missing TROUBLE alert is caught.

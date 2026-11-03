@@ -1024,6 +1024,7 @@ MODE_INT_TO_TOOL = {
     13: "opsgenie",     # OpsGenie (no adapter yet)
     20: "jira",         # Jira (no adapter yet)
     26: "freshservice", # FreshService (no adapter yet)
+    56: "itoc360",      # iTOC360 (live; no read-back adapter yet)
 }
 
 # String-based fallback — used when CommunicationMode is absent or non-int.
@@ -1064,6 +1065,7 @@ NON_TICKETING_MODES = {
     "email", "sms", "voice call", "slack", "microsoft teams",
     "google chat", "telegram", "connectwise", "analytics plus",
     "google cloud pub/sub", "application manager", "discord",
+    "mattermost",
 }
 
 

@@ -151,6 +151,10 @@ MODE_INT_TO_TOOL = {
     50: "sdp_msp_cloud",
     52: "haloitsm",     # live
     54: "topdesk",      # live
+    # New framework (s247_Integrations), seen live on the automation
+    # account 3 Nov 2026 from Trigger Test rows:
+    55: "mattermost",   # Mattermost  (service type 46, Collaboration)
+    56: "itoc360",      # iTOC360     (service type 47, IncidentManagement)
 }
 
 # Ticket IDs that are obviously not real IDs and must be discarded.
@@ -473,6 +477,7 @@ def cmd_fetch(args):
 
 
 ALERT_STATUS = {"0": "DOWN", "1": "UP", "2": "TROUBLE", "3": "CRITICAL"}
+STATUS_IN_MSG_RE = re.compile(r"\bis\s+(down|up|trouble|critical)\b", re.I)
 
 
 def as_list(v):
@@ -664,6 +669,12 @@ def cmd_verify(args):
         msg = str(e.get("Message") or e.get("message") or "")
         st_code = str(e.get("Status") or e.get("status") or "")
         st_txt = ALERT_STATUS.get(st_code, st_code)
+        if not st_txt:
+            # Rows from the new integration framework (Mattermost, iTOC360)
+            # may carry no Status field. Read it from the product's own
+            # message, "<monitor> is Down", so the row is not lost.
+            m_st = STATUS_IN_MSG_RE.search(msg)
+            st_txt = m_st.group(1).upper() if m_st else ""
         blob = (msg + " " + json.dumps(e)).lower()
 
         # CommunicationMode integer → record for tool mapping
