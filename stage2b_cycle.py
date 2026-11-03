@@ -584,6 +584,58 @@ def parse_routes(spec, monitors):
     return routes[:len(monitors)]
 
 
+def polling_gate(grid, token, monitors, dry_run=False):
+    """Drop monitors Site24x7 is not actually polling.
+
+    A monitor whose scheduler is stuck accepts every keyword change but
+    never re-checks the page, so the cycle waited 10 min per step for a
+    state that could never come and the report showed confusing "no rows"
+    rows (tpt "Monitor 1" stuck since 14 Oct, tpt1 "Do not Delete -02").
+    Stale -> one Poll Now -> still stale -> excluded, and recorded in
+    result["not_polling"] so the report names it as a setup problem.
+    """
+    keep, dropped = [], []
+    for m in monitors:
+        mid = str(m["monitor_id"])
+        _, mon = api(grid, f"/api/monitors/{mid}", token)
+        try:
+            freq = int((mon or {}).get("data", {}).get("check_frequency") or 1)
+        except (TypeError, ValueError):
+            freq = 1
+        limit = max(10, 3 * freq)            # minutes
+
+        def age_minutes():
+            _, cs = api(grid, f"/api/current_status/{mid}", token)
+            raw = ((cs or {}).get("data") or {}).get("last_polled_time")
+            try:
+                when = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S%z")
+            except (TypeError, ValueError):
+                return None, raw
+            return (datetime.now(timezone.utc) - when).total_seconds() / 60, raw
+
+        age, raw = age_minutes()
+        if age is not None and age > limit and not dry_run:
+            log(f"  [!! ] {m['name']}: last polled {age:.0f} min ago "
+                f"(checks every {freq} min) — sending Poll Now")
+            api(grid, f"/api/monitor/poll_now/{mid}", token)
+            for _ in range(6):
+                time.sleep(20)
+                age, raw = age_minutes()
+                if age is not None and age <= limit:
+                    break
+        if age is None or age <= limit:
+            keep.append(m)
+            continue
+        dropped.append({"monitor_id": mid, "name": m["name"],
+                        "last_polled_time": raw, "age_minutes": round(age),
+                        "check_frequency": freq})
+        step(f"{m['name']}: NOT POLLING — excluded from the cycle", False,
+             f"last polled {raw} ({age:.0f} min ago), checks every {freq} "
+             f"min" + ("" if dry_run else ", Poll Now did not refresh it"))
+    result["not_polling"] = dropped
+    return keep
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Stage 2b - drive real alert cycles on one or more "
@@ -713,7 +765,11 @@ def main():
         die("no WEBSITE monitors in the allowlist, so there is nothing this "
             "script can drive yet. Server-state driving is not implemented.")
 
-    selected = websites
+    selected = polling_gate(grid, token, websites, dry_run=args.dry_run)
+    if not selected:
+        die("none of the website monitors is being polled by Site24x7 "
+            "(see 'NOT POLLING' above), so no alert can fire. Fix or replace "
+            "those monitors; nothing was changed.")
 
     # ---- 2. routes --------------------------------------------------------
     if args.severity is not None:

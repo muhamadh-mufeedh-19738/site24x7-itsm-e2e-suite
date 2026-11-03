@@ -2466,6 +2466,21 @@ def main():
     # immediately. Nothing about them had to change.
     per_monitor = []
     window_note = None
+    # Monitors stage2b left out because Site24x7 is not polling them. One
+    # clear row each, instead of 10-minute waits and "no rows" noise.
+    for np_ in ((cycle or {}).get("not_polling") or []):
+        per_monitor.append({
+            "monitor_id": str(np_.get("monitor_id")),
+            "name": np_.get("name"), "monitor_type": "URL", "blocked": True,
+            "headline": "Monitor is NOT being polled by Site24x7 — test "
+                        "setup issue",
+            "reason": (f"Last polled {np_.get('last_polled_time')} "
+                       f"({np_.get('age_minutes')} min ago) although it "
+                       f"checks every {np_.get('check_frequency')} min, and "
+                       f"Poll Now did not refresh it, so it was left out of "
+                       f"the cycle. Suspend + Activate it in Site24x7, or "
+                       f"replace it with a new monitor."),
+        })
     for mon in monitors:
         mid = mon["monitor_id"]
         name = mon.get("name") or mid
