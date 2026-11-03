@@ -63,6 +63,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import sys
 from urllib.parse import urlparse
 
@@ -371,6 +372,23 @@ def choose_account(accounts):
         log("  Not one of the options. Try again.")
 
 
+def newest(folder, prefix, suffix):
+    try:
+        files = [os.path.join(folder, f) for f in os.listdir(folder)
+                 if f.startswith(prefix) and f.endswith(suffix)]
+        return max(files, key=os.path.getmtime) if files else None
+    except OSError:
+        return None
+
+
+def read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
 def build_env(name, gname, grid):
     d = os.path.join(ACCOUNTS, name)
     cfg = read_env_file(os.path.join(d, "account.env"))
@@ -440,6 +458,11 @@ def main():
                     help="capture the LIVE third-party integration list for "
                          "this account, so deleted integrations stop "
                          "appearing in reports")
+    ap.add_argument("--full", action="store_true",
+                    help="consolidated (keyword) cycle + event-based "
+                         "(response time) cycle + ONE summary report. The "
+                         "event monitor/profile come from accounts/<acct>/"
+                         "events.json")
     ap.add_argument("--itoc360-login", action="store_true",
                     help="sign in to iTOC360 once in a browser window, so "
                          "the suite can read iTOC360 alerts")
@@ -677,9 +700,63 @@ def main():
     env["S247_LOGIN_JS"] = os.path.abspath(LOGIN_JS)
     env["S247_INTEGRATIONS_FILE"] = os.path.join(d, "integrations.json")
     env["S247_NO_AUTO_OPEN"] = "1"
+    # --full: the event-based cycle drives a DIFFERENT monitor, so it runs
+    # AT THE SAME TIME as the consolidated run (cut ~45 min to ~20 min).
+    # Only the cycle runs in parallel; its verification runs afterwards, so
+    # the two never share the working files.
+    ev, ev_proc, ev_log = None, None, None
+    if args.full:
+        ev_file = os.path.join(d, "events.json")
+        ev = read_json_file(ev_file)
+        if not ev or not ev.get("monitor_id") or not ev.get("profile_id"):
+            log(f"\n  [WARN] {ev_file} missing or incomplete — the event-based "
+                f"cycle is SKIPPED and the summary will say so.")
+            ev = None
+        else:
+            os.makedirs(os.path.join(d, "reports"), exist_ok=True)
+            ev_log = os.path.join(d, "reports", "events_cycle_"
+                                  + time.strftime("%Y%m%d_%H%M%S") + ".log")
+            section(f"EVENT-BASED CYCLE STARTED IN PARALLEL — {name}")
+            log(f"  monitor {ev.get('monitor_name') or ev['monitor_id']} · "
+                f"log: {ev_log}")
+            ev_proc = subprocess.Popen(
+                [sys.executable, os.path.join(HERE, "stage2c_events.py"),
+                 "--monitor-id", str(ev["monitor_id"]),
+                 "--profile-id", str(ev["profile_id"])],
+                env=env, cwd=d, stdout=open(ev_log, "w"),
+                stderr=subprocess.STDOUT)
+
     section(f"RUNNING THE SUITE — {name}")
     rc = run([sys.executable, os.path.join(HERE, "run_all.py")] + passthrough,
              env, d, "run_all.py")
+    cons_json = newest(os.path.join(d, "reports"), "report_2", ".json")
+
+    if args.full:
+        evts_json = None
+        if ev_proc is not None:
+            section(f"WAITING FOR THE EVENT-BASED CYCLE — {name}")
+            ev_rc = ev_proc.wait()
+            with open(ev_log, encoding="utf-8") as fh:
+                for line in fh:
+                    if "[ OK ]" in line or "[FAIL]" in line or "VERDICT" in line:
+                        log(line.rstrip())
+            section(f"VERIFYING THE EVENT-BASED CYCLE — {name}")
+            rc2 = run([sys.executable, os.path.join(HERE, "run_all.py")]
+                      + [a for a in passthrough if a != "--skip-trigger-test"]
+                      + ["--events-monitor", str(ev["monitor_id"]),
+                         "--events-profile", str(ev["profile_id"]),
+                         "--skip-cycle", "--skip-trigger-test"],
+                      env, d, "run_all.py --events")
+            rc = max(rc, rc2, 1 if ev_rc else 0)
+            evts_json = newest(os.path.join(d, "reports"), "events_report_2", ".json")
+        section(f"ONE SUMMARY REPORT — {name}")
+        argv = [sys.executable, os.path.join(HERE, "summary_report.py"),
+                "--account", name]
+        if cons_json:
+            argv += ["--consolidated", cons_json]
+        if evts_json:
+            argv += ["--events", evts_json]
+        run(argv, env, d, "summary_report.py")
 
     section(f"DONE — {name}")
     rep = os.path.join(d, "reports")

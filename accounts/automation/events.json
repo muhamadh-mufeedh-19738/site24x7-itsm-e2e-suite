@@ -1,0 +1,7 @@
+{
+  "_comment": "Event-based test (itsm.py --full). monitor_id: a monitor whose notification profile is 'Notify for every event occurrence'. profile_id: a threshold profile used ONLY by this test; the monitor's own profile is restored afterwards.",
+  "monitor_id": "73970000003442142",
+  "monitor_name": "Website - RT",
+  "profile_id": "73970000004080144",
+  "profile_name": "E2E Events - Response Time"
+}

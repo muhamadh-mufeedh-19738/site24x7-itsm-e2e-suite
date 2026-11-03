@@ -45,7 +45,8 @@ RESULT = "stage2c_result.json"
 STATE_CODE = {"critical": 3, "trouble": 2, "up": 1}
 # (trouble ms, critical ms) for each target state
 THRESHOLDS = {"critical": (1, 2), "trouble": (1, 60000), "up": (30000, 60000)}
-SETTLE_AFTER_UP = 180       # recovery alerts reach every tool within this
+SETTLE_AFTER_UP = 90        # recovery rows land within ~30s (3 Nov runs);
+                            # the in-tool checks retry if a tool lags
 STATE_WAIT = 420            # max seconds to reach a state
 
 result = {"started_at": datetime.now().isoformat(timespec="seconds"),
@@ -113,7 +114,7 @@ def drive(grid, tok, mid, name, pid, profile, state, route_key):
         return False
     s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
     reached, last, waited = s2.wait_for(grid, tok, mid, STATE_CODE[state],
-                                        STATE_WAIT, poll_every=15)
+                                        STATE_WAIT, poll_every=10)
     result["transitions"].append({
         "monitor_id": mid, "monitor": name, "key": route_key, "state": state,
         "observed_status": last, "at": now_local(), "waited_seconds": waited,
