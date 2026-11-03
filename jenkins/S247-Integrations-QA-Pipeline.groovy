@@ -147,6 +147,9 @@ def report(ws):
     ev = newest("events_report_*.html")
     if ev:
         shutil.copyfile(ev, os.path.join(out, "events_report.html"))
+    dl = newest("diff_line.txt")
+    if dl:
+        shutil.copyfile(dl, os.path.join(out, "diff_line.txt"))
     for pat, name in (("report_*.json", "report.json"), ("junit_*.xml", "junit.xml"),
                       ("events_report_*.json", "events_report.json"),
                       ("events_junit_*.xml", "junit_events.xml")):
@@ -168,6 +171,21 @@ def shot(ws):
     if os.path.isfile(src) and os.path.getmtime(src) >= t0:
         shutil.copyfile(src, os.path.join(out, "login_failure.png"))
         print("Login screenshot saved: see Build Artifacts > suite-report/login_failure.png")
+
+def buildlabel(grid, deploy, url):
+    # Which build is on the grid: the one deployed now, else the last one this
+    # pipeline deployed to that grid (remembered on the Jenkins server).
+    d = os.environ.get("S247_HISTORY_DIR", "/var/lib/jenkins/.s247-history")
+    os.makedirs(d, exist_ok=True)
+    f = os.path.join(d, "grid-" + grid + ".build")
+    parts = [p for p in url.strip().rstrip("/").split("/") if p]
+    label = "/".join(parts[-3:-1]) if len(parts) >= 3 and parts[-1].lower().endswith(".zip") else ""
+    if deploy == "true" and label:
+        with open(f, "w") as fh:
+            fh.write(label)
+    elif os.path.isfile(f):
+        label = open(f).read().strip()
+    print(label)
 
 def itoc_seed(acct, seed):
     # Jenkins keeps its OWN refreshed iTOC360 session between builds. The
@@ -191,7 +209,7 @@ def itoc_seed(acct, seed):
 
 cmd, args = sys.argv[1], sys.argv[2:]
 {"extract": extract, "place": place, "start": start, "cleanup": cleanup, "report": report, "shot": shot,
- "itoc_seed": itoc_seed}[cmd](*args)
+ "itoc_seed": itoc_seed, "buildlabel": buildlabel}[cmd](*args)
 '''
 
 // Calls the SD API with the current access token. Token is never printed.
@@ -600,6 +618,7 @@ pipeline {
                         PLAYWRIGHT_BROWSERS_PATH = '/var/lib/jenkins/pw-browsers'
                         S247_BROWSER_CHANNEL     = 'chromium'
                         ITOC_STATE_DIR           = '/var/lib/jenkins/.s247-itoc360'
+                        S247_HISTORY_DIR         = '/var/lib/jenkins/.s247-history'
                     }
                     steps {
                         script {
@@ -648,9 +667,15 @@ pipeline {
                             }
 
                             String fullFlag = params.FULL_RUN ? '--full' : ''
+                            // Which build is on the grid, for "vs previous build" in the report
+                            String buildLabel = ''
+                            withEnv(["BL_DEPLOY=${params.DEPLOY}", "BL_URL=${params.SD_BUILD_URL ?: ''}"]) {
+                                buildLabel = sh(returnStdout: true, script: 'set +x; python3 "$WORKSPACE/suite_tools.py" buildlabel "$GRID" "$BL_DEPLOY" "$BL_URL"').trim()
+                            }
+                            echo "Build on the grid: ${buildLabel ?: 'unknown'}"
                             int rc = 2
                             try {
-                                withEnv(["FULL_FLAG=${fullFlag}"]) {
+                                withEnv(["FULL_FLAG=${fullFlag}", "S247_BUILD_LABEL=${buildLabel}"]) {
                                 withCredentials(creds) {
                                     // 2) Secrets + browser into place, 3) run the suite
                                     rc = sh(returnStatus: true, script: '''
@@ -684,6 +709,10 @@ pipeline {
                             // 4) Pick up THIS run's report files
                             int found = sh(returnStatus: true, script: 'set +x; python3 "$WORKSPACE/suite_tools.py" report "$WORKSPACE"')
 
+                            if (found == 0 && fileExists('suite-report/diff_line.txt')) {
+                                // "2 new problem(s), 1 fixed, ..." right on the build page
+                                currentBuild.description = readFile('suite-report/diff_line.txt').trim()
+                            }
                             if (found == 0) {
                                 publishHTML(target: [
                                     allowMissing         : false,

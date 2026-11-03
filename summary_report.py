@@ -240,6 +240,152 @@ def trigger_tests(rep):
     return out or '<p class="muted">Trigger tests were not run.</p>'
 
 
+# ---------------------------------------------------------------- run diff
+# Each run leaves a small RESULT snapshot (verdict + every state per
+# integration and scenario, trigger tests, build). The report compares it
+# with the previous run of the SAME account on the SAME grid, and adds one
+# line against the last run on a DIFFERENT build. Ticket ids and times
+# change every run, so they are never counted as a difference.
+
+def build_label():
+    """'<branch>/<date>' from the SD build URL Jenkins deployed, if known."""
+    if os.environ.get("S247_BUILD_LABEL"):
+        return os.environ["S247_BUILD_LABEL"].strip()
+    url = (os.environ.get("S247_BUILD_URL") or "").strip().rstrip("/")
+    parts = [p for p in url.split("/") if p]
+    if len(parts) >= 3 and parts[-1].lower().endswith(".zip"):
+        return "/".join(parts[-3:-1])
+    return ""
+
+
+def snapshot(reps, account, grid_name, started, finished, total):
+    res = {}
+    for kind, r in reps:
+        for f in (r or {}).get("findings") or []:
+            if f.get("integration") in ("(all integrations)", "(server coverage)"):
+                continue
+            mode = "Event-based" if kind == "events" else "Consolidated"
+            key = f"{mode} · {f.get('monitor')} · {f.get('integration')}"
+            res[key] = {"mode": mode, "scenario": f.get("monitor"),
+                        "integration": f.get("integration"), "bucket": f["bucket"],
+                        "states": {st["state"]: bool(st.get("ok")) for st in steps_of(f)},
+                        "tickets": ticket_ids(f)}
+    trig = {t.get("name"): t.get("final_verdict") for _, r in reps
+            for t in (((r or {}).get("trigger_test") or {}).get("results") or [])}
+    return {"account": account, "grid": grid_name, "started": started,
+            "finished": finished, "total": total, "build": build_label(),
+            "results": res, "trigger": trig}
+
+
+def history_dir(out_dir):
+    d = os.environ.get("S247_HISTORY_DIR") or os.path.join(out_dir, "history")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def previous_runs(hdir, account, grid_name):
+    runs = []
+    for p in glob.glob(os.path.join(hdir, f"{account}__{grid_name}__*.json")):
+        snap = load(p)
+        if snap and snap.get("results"):
+            runs.append(snap)
+    return sorted(runs, key=lambda x: x.get("started") or "")
+
+
+def compare(cur, prev):
+    out = {"new": [], "fixed": [], "still": [], "states": [], "other": [], "same": 0}
+    keys = sorted(set(cur["results"]) | set(prev["results"]))
+    for k in keys:
+        a, b = prev["results"].get(k), cur["results"].get(k)
+        if not a:
+            out["other"].append((k, "new in this run", b))
+            continue
+        if not b:
+            out["other"].append((k, "not in this run", a))
+            continue
+        ba, bb = a["bucket"], b["bucket"]
+        flips = [f'{st} {"✓" if a["states"].get(st) else "✗"} → {"✓" if ok else "✗"}'
+                 for st, ok in b["states"].items()
+                 if st in a["states"] and a["states"][st] != ok]
+        if bb == DEFECT and ba != DEFECT:
+            out["new"].append((k, f"{WORD[ba]} → Defect", b, flips))
+        elif ba == DEFECT and bb == PASS:
+            out["fixed"].append((k, "Defect → Pass", b, flips))
+        elif ba == DEFECT and bb == DEFECT:
+            out["still"].append((k, "Defect", b, flips))
+        elif ba != bb:
+            out["other"].append((k, f"{WORD[ba]} → {WORD[bb]}", b))
+        elif flips:
+            out["states"].append((k, "", b, flips))
+        else:
+            out["same"] += 1
+    for name in sorted(set(cur["trigger"]) | set(prev["trigger"]), key=str):
+        x, y = prev["trigger"].get(name), cur["trigger"].get(name)
+        if x != y:
+            out["other"].append((f"Trigger test · {name}", f"{x or 'not run'} → {y or 'not run'}", None))
+    return out
+
+
+def counts_line(d):
+    return (f'{len(d["new"])} new problem(s), {len(d["fixed"])} fixed, '
+            f'{len(d["still"])} still failing')
+
+
+def diff_html(cur, runs):
+    prev = runs[-1] if runs else None
+    if not prev:
+        return ("<p class=\"muted\">No previous run of this account on this grid "
+                "to compare with. The next run will show what changed.</p>", "first run - nothing to compare")
+    d = compare(cur, prev)
+    same_build = cur["build"] and cur["build"] == prev.get("build")
+    btxt = (f'Build {esc(prev.get("build"))} → {esc(cur["build"])}' if cur["build"] and prev.get("build")
+            and not same_build else "same build, re-run" if same_build
+            else "build not recorded for a local run")
+    head = (f'<div class="dhd">Compared with the previous run: <b>{esc(prev.get("started"))}</b> · {btxt}'
+            f' · time {esc(prev.get("total"))} → {esc(cur["total"])}</div>')
+
+    def label(k):
+        r = cur["results"].get(k) or prev["results"].get(k) or {}
+        if not r:
+            return esc(k)
+        return (f'<b>{esc(r.get("integration"))}</b> <span class="muted">· {esc(r.get("mode"))} · '
+                f'{esc(r.get("scenario"))}</span>')
+
+    def item(k, change, flips, cls):
+        return (f'<li>{label(k)} <span class="{cls}">{esc(change)}</span>'
+                + (f' <span class="muted small">{esc("; ".join(flips))}</span>' if flips else "") + "</li>")
+    body = ""
+    for key, title, cls in (("new", "New problems", "bad"), ("fixed", "Fixed", "ok"),
+                            ("still", "Still failing", "warnc")):
+        rows = d[key]
+        body += (f'<div class="dgrp"><div class="dt {cls}">{title} ({len(rows)})</div>'
+                 + (f'<ul class="dl">{"".join(item(k, c, fl, cls) for k, c, _, fl in rows)}</ul>'
+                    if rows else '<div class="muted small">none</div>') + "</div>")
+    extra = [f'{label(k)}: {esc("; ".join(fl))}' for k, _, _, fl in d["states"]]
+    extra += [f'{label(k) if k in cur["results"] or k in prev["results"] else esc(k)}: {esc(c)}'
+              for k, c, _ in d["other"]]
+    body += ('<div class="dgrp"><div class="dt">Other changes</div>'
+             + (f'<ul class="dl">{"".join(f"<li>{x}</li>" for x in extra)}</ul>' if extra
+                else '<div class="muted small">none</div>')
+             + f'<div class="muted small">Unchanged: {d["same"]} result(s)</div></div>')
+
+    # one line against the last run on a DIFFERENT build
+    other = [r for r in runs if cur["build"] and r.get("build") and r.get("build") != cur["build"]]
+    if other:
+        pb = other[-1]
+        db = compare(cur, pb)
+        names = ", ".join(k for k, *_ in db["new"]) or "none"
+        bline = (f'<div class="dbl">vs previous build <b>{esc(pb.get("build"))}</b> '
+                 f'(run {esc(pb.get("started"))}): {esc(counts_line(db))}. New problems: {esc(names)}</div>')
+    elif cur["build"]:
+        bline = '<div class="dbl muted">vs previous build: no earlier run on a different build yet.</div>'
+    else:
+        bline = ('<div class="dbl muted">vs previous build: this run did not record which build '
+                 'was deployed (local run). Jenkins runs record it.</div>')
+    line = f'vs run {prev.get("started")} ({btxt}): {counts_line(d)}'
+    return head + f'<div class="dgrid">{body}</div>' + bline, line
+
+
 CSS = """
 :root{--bg:#f5f6f8;--card:#fff;--ink:#16191d;--mut:#667080;--line:#e3e6ea;
 --pass:#1a7f37;--passbg:#e8f5ec;--def:#c62828;--defbg:#fdecec;--blk:#a15c00;
@@ -297,6 +443,11 @@ summary{cursor:pointer;padding:10px 14px}details[open] summary{border-bottom:1px
 .st-t th,.st-t td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
 .mono{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
 .foot{color:var(--mut);font-size:12px;margin-top:26px}
+.warnc{color:var(--blk)}.dhd{font-size:13px;margin-bottom:10px}
+.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.dgrp{min-width:0}.dt{font-weight:700;font-size:13px;margin-bottom:4px}
+.dl{margin:0;padding-left:18px;font-size:12.5px}.dl li{margin:3px 0}
+.dbl{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px}
 """
 
 
@@ -334,6 +485,13 @@ def build(cons, evts, account, out_path):
     mon_c = ", ".join(c["title"] for c in scenarios(cons, "consolidated"))
     mon_e = ", ".join(sorted({c["title"] for c in scenarios(evts, "events")}))
     user = os.environ.get("S247_LOGIN_USER") or "—"
+    grid_name = os.environ.get("S247_GRID_NAME") or grid
+    cur = snapshot(reps, account, grid_name, started, finished, total)
+    hdir = history_dir(os.path.dirname(out_path) or ".")
+    runs = [r for r in previous_runs(hdir, account, grid_name)
+            if (r.get("started") or "") < started]
+    diff_block, diff_line = diff_html(cur, runs)
+    build_txt = cur["build"] or "not recorded (local run)"
 
     attn = ""
     for f in sorted((f for f in findings if f["bucket"] in (DEFECT, BLOCKED, INCONC)),
@@ -389,12 +547,15 @@ def build(cons, evts, account, out_path):
 <div><span>Started</span>{esc(started) or "—"}</div>
 <div><span>Finished</span>{esc(finished) or "—"}</div>
 <div><span>Total time</span>{esc(total)}<small>{esc(parts)}</small></div>
+<div><span>Build</span>{esc(build_txt)}</div>
 <div class="wide"><span>Monitors</span>{esc(mon_c) or "—"} <em>(consolidated)</em>
 {(" · " + esc(mon_e) + " <em>(event-based)</em>") if mon_e else ""}</div>
 </div>
 <div class="banner b-{health}">{ICON[health]} {WORD[health].upper()} — {esc(msg)}
 <small>Consolidated alerts (monitor level) and event-based alerts (every event), each checked state by state.</small></div>
 <div class="tiles">{tiles}</div>
+
+<h2 id="changes">What changed since the last run</h2><div class="card">{diff_block}</div>
 
 <h2 id="attention">Needs attention</h2><div class="card">{attn}</div>
 
@@ -415,6 +576,14 @@ Ticket ids are the ids inside the tool. No passwords or tokens are in this repor
 </div></body></html>"""
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(doc)
+    stamp = (started or "").replace("-", "").replace(":", "").replace(" ", "_")
+    with open(os.path.join(hdir, f"{account}__{grid_name}__{stamp}.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(cur, fh, indent=1)
+    with open(os.path.join(os.path.dirname(out_path) or ".", "diff_line.txt"), "w",
+              encoding="utf-8") as fh:
+        fh.write(diff_line + "\n")
+    print(f"  [OK] diff: {diff_line}")
     return health
 
 
