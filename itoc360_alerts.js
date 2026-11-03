@@ -61,20 +61,37 @@ function finish(obj, code) {
 
   const base = { ok: false, monitor_id: MONITOR_ID, since: SINCE, until: UNTIL,
                  read_at: new Date().toISOString(), alerts: [] };
-  if (!fs.existsSync(PROFILE)) {
+  // JENKINS: no browser profile there. Its own iTOC360 session is a saved
+  // browser state (itsm.py --itoc360-jenkins-login, uploaded as the
+  // S247_<ACCT>_ITOC_STATE credential and seeded into ITOC_STATE_DIR). The
+  // refreshed state is written back after every read, so the session lives on.
+  const STATE_FILE = process.env.ITOC_STATE_DIR
+    ? path.join(process.env.ITOC_STATE_DIR, `state-${ACCOUNT}.json`) : null;
+  if (STATE_FILE && !fs.existsSync(STATE_FILE)) {
+    finish({ ...base, reason: 'no_session',
+             message: `no iTOC360 session for Jenkins. On the Mac run: python3 itsm.py `
+                      + `-a ${ACCOUNT} --itoc360-jenkins-login, then python3 jenkins_secrets.py` }, 3);
+  }
+  if (!STATE_FILE && !fs.existsSync(PROFILE)) {
     finish({ ...base, reason: 'no_session',
              message: `iTOC360 is not signed in on this machine. Run once: `
                       + `python3 itsm.py -a ${ACCOUNT} --itoc360-login` }, 3);
   }
 
-  let context;
+  let context, browser = null;
+  const launchOpts = {
+    headless: true, channel: STATE_FILE ? 'chromium' : channel,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--no-first-run', '--no-default-browser-check',
+           '--disable-blink-features=AutomationControlled'],
+  };
   try {
-    context = await chromium.launchPersistentContext(PROFILE, {
-      headless: true, channel,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--no-first-run', '--no-default-browser-check',
-             '--disable-blink-features=AutomationControlled'],
-    });
+    if (STATE_FILE) {
+      browser = await chromium.launch(launchOpts);
+      context = await browser.newContext({ storageState: STATE_FILE });
+    } else {
+      context = await chromium.launchPersistentContext(PROFILE, launchOpts);
+    }
   } catch (e) {
     finish({ ...base, reason: 'browser',
              message: 'browser could not start: ' + String(e.message).split('\n')[0] }, 2);
@@ -153,7 +170,12 @@ function finish(obj, code) {
         })),
       });
     }
+    if (STATE_FILE) {
+      await context.storageState({ path: STATE_FILE });   // keep the refreshed session
+      fs.chmodSync(STATE_FILE, 0o600);
+    }
     await context.close();
+    if (browser) await browser.close();
     finish({ ...base, ok: true, alerts: out,
              message: `${out.length} iTOC360 alert(s) for monitor ${MONITOR_ID} `
                       + `since ${SINCE}` }, 0);

@@ -157,6 +157,14 @@ function shape(body) {
     }
 
     try { fs.writeFileSync(channelFile, channel); } catch (e) { /* not fatal */ }
+    // --export-state FILE: save this signed-in session as a browser state for
+    // Jenkins (git-ignored; uploaded by jenkins_secrets.py).
+    const ei = process.argv.indexOf('--export-state');
+    if (ei > -1 && process.argv[ei + 1]) {
+      await context.storageState({ path: process.argv[ei + 1] });
+      fs.chmodSync(process.argv[ei + 1], 0o600);
+      console.log(`  [OK] Jenkins session saved: ${process.argv[ei + 1]}`);
+    }
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
     fs.writeFileSync(OUT, JSON.stringify({
       captured_at: new Date().toISOString(), base: BASE, page_url: page.url(),

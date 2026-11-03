@@ -47,6 +47,12 @@ def files_for(acct):
         (f"S247_{A}_ACCOUNT_ENV", os.path.join(HERE, "accounts", acct, "account.env")),
         (f"S247_{A}_ITSM_ENV", os.path.join(HERE, "accounts", acct, ".itsm.env")),
         (f"S247_{A}_TOKEN_ENV", os.path.join(HERE, f".token.{acct}.env")),
+    ] + [
+        # OPTIONAL: iTOC360 session for Jenkins (itsm.py --itoc360-jenkins-login).
+        # Only accounts that have one upload it.
+        (f"S247_{A}_ITOC_STATE", p) for p in
+        [os.path.join(HERE, "accounts", acct, ".itoc360_jenkins_state.json")]
+        if os.path.isfile(p)
     ]
 
 

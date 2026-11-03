@@ -49,7 +49,7 @@ import groovy.transform.Field
 // for Jenkins (rm is "Permission denied", git is missing), so every file job
 // (unpack code, place secrets, clean secrets, pick report) is done in Python.
 @Field String SUITE_TOOLS_PY = '''
-import sys, os, shutil, tarfile, glob, time
+import sys, os, shutil, tarfile, glob, time, hashlib
 
 NL = chr(10)
 
@@ -135,17 +135,25 @@ def report(ws):
                  if os.path.getmtime(p) >= t0]
         return max(files, key=os.path.getmtime) if files else None
     h = newest("report_*.html")
-    if not h:
+    summ = newest("summary_report_*.html")
+    if not h and not summ:
         fail("the suite did not write an HTML report during this run", 1)
     out = os.path.join(ws, "suite-report")
-    shutil.copyfile(h, os.path.join(out, "report.html"))
-    j = newest("report_*.json")
-    x = newest("junit_*.xml")
-    if j:
-        shutil.copyfile(j, os.path.join(out, "report.json"))
-    if x:
-        shutil.copyfile(x, os.path.join(out, "junit.xml"))
-    print("Report picked up: " + h)
+    # FULL_RUN: the one-page summary IS the report; the two detailed reports
+    # stay next to it for developers.
+    shutil.copyfile(summ or h, os.path.join(out, "report.html"))
+    if summ and h:
+        shutil.copyfile(h, os.path.join(out, "consolidated_report.html"))
+    ev = newest("events_report_*.html")
+    if ev:
+        shutil.copyfile(ev, os.path.join(out, "events_report.html"))
+    for pat, name in (("report_*.json", "report.json"), ("junit_*.xml", "junit.xml"),
+                      ("events_report_*.json", "events_report.json"),
+                      ("events_junit_*.xml", "junit_events.xml")):
+        f = newest(pat)
+        if f:
+            shutil.copyfile(f, os.path.join(out, name))
+    print("Report picked up: " + (summ or h))
 
 def shot(ws):
     src = "/tmp/s247_login_failure.png"
@@ -161,8 +169,29 @@ def shot(ws):
         shutil.copyfile(src, os.path.join(out, "login_failure.png"))
         print("Login screenshot saved: see Build Artifacts > suite-report/login_failure.png")
 
+def itoc_seed(acct, seed):
+    # Jenkins keeps its OWN refreshed iTOC360 session between builds. The
+    # uploaded credential only replaces it when it changed (a new sign-in).
+    d = os.environ.get("ITOC_STATE_DIR", "/var/lib/jenkins/.s247-itoc360")
+    os.makedirs(d, exist_ok=True)
+    os.chmod(d, 0o700)
+    dest = os.path.join(d, "state-" + acct + ".json")
+    mark = os.path.join(d, "seed-" + acct + ".sha256")
+    with open(seed, "rb") as f:
+        h = hashlib.sha256(f.read()).hexdigest()
+    old = open(mark).read().strip() if os.path.isfile(mark) else ""
+    if h != old or not os.path.isfile(dest):
+        shutil.copyfile(seed, dest)
+        os.chmod(dest, 0o600)
+        with open(mark, "w") as f:
+            f.write(h)
+        print("iTOC360 session for " + acct + ": new sign-in installed")
+    else:
+        print("iTOC360 session for " + acct + ": keeping the refreshed session from earlier builds")
+
 cmd, args = sys.argv[1], sys.argv[2:]
-{"extract": extract, "place": place, "start": start, "cleanup": cleanup, "report": report, "shot": shot}[cmd](*args)
+{"extract": extract, "place": place, "start": start, "cleanup": cleanup, "report": report, "shot": shot,
+ "itoc_seed": itoc_seed}[cmd](*args)
 '''
 
 // Calls the SD API with the current access token. Token is never printed.
@@ -293,6 +322,7 @@ pipeline {
         choice(name: 'ACCOUNT', choices: ['automation', 'tpt', 'tpt1'], description: 'Which Site24x7 account the E2E suite runs against (folder name under accounts/)')
         booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy the build in SD first. Untick to ONLY run the E2E suite on what is already on the grid (SD_BUILD_URL can then be left empty).')
         booleanParam(name: 'RUN_SUITE', defaultValue: true, description: 'Run the E2E suite after the deploy completes. Untick to only deploy.')
+        booleanParam(name: 'FULL_RUN', defaultValue: true, description: 'Consolidated alerts (keyword cycle) AND event-based alerts (response time: CRITICAL/TROUBLE routes) in one run, with ONE summary report. Needs accounts/<ACCOUNT>/events.json in the repo. Untick for the consolidated run only.')
         string(name: 'SD_BUILD_URL', defaultValue: '', description: 'Full build URL to deploy, e.g. https://build.zohocorp.com/zoho/webmonitor/webhost/<BRANCH>/<DATE>/AdventNetWebMon.zip')
         booleanParam(name: 'DEPLOY_PLUS', defaultValue: false, description: 'Want to check PLUS monitors as well (server / network / poller / cloud)? Tick to ALSO deploy a Plus server build to the Plus grid below.')
         choice(name: 'PLUS_GRID', choices: ['integrations-qa-plus'], description: 'Plus grid that receives the Plus server build (only used when DEPLOY_PLUS is ticked).')
@@ -328,7 +358,7 @@ pipeline {
         stage('1. Check inputs') {
             steps {
                 script {
-                    if (params.ACCOUNT == null || params.RUN_SUITE == null || params.DEPLOY_PLUS == null) {
+                    if (params.ACCOUNT == null || params.RUN_SUITE == null || params.DEPLOY_PLUS == null || params.FULL_RUN == null) {
                         error('The new boxes are not loaded yet (this happens once after updating the script). Click "Build with Parameters" again - you will now see them. Nothing was deployed.')
                     }
 
@@ -569,6 +599,7 @@ pipeline {
                     environment {
                         PLAYWRIGHT_BROWSERS_PATH = '/var/lib/jenkins/pw-browsers'
                         S247_BROWSER_CHANNEL     = 'chromium'
+                        ITOC_STATE_DIR           = '/var/lib/jenkins/.s247-itoc360'
                     }
                     steps {
                         script {
@@ -606,8 +637,20 @@ pipeline {
                                 file(credentialsId: "S247_${A}_TOKEN_ENV",   variable: 'TOKEN_ENV')
                             ]
 
+                            // OPTIONAL: iTOC360 session for Jenkins (only accounts with iTOC360).
+                            // Missing credential = iTOC360 shows BLOCKED; nothing else changes.
+                            try {
+                                withCredentials([file(credentialsId: "S247_${A}_ITOC_STATE", variable: 'ITOC_SEED')]) {
+                                    sh 'set +x; python3 "$WORKSPACE/suite_tools.py" itoc_seed "$ACCOUNT" "$ITOC_SEED"'
+                                }
+                            } catch (ignored) {
+                                echo "No S247_${A}_ITOC_STATE credential - iTOC360 (if this account has it) will show BLOCKED."
+                            }
+
+                            String fullFlag = params.FULL_RUN ? '--full' : ''
                             int rc = 2
                             try {
+                                withEnv(["FULL_FLAG=${fullFlag}"]) {
                                 withCredentials(creds) {
                                     // 2) Secrets + browser into place, 3) run the suite
                                     rc = sh(returnStatus: true, script: '''
@@ -620,9 +663,10 @@ pipeline {
                                         npx playwright install chromium || exit 2
 
                                         python3 "$WORKSPACE/suite_tools.py" start "$WORKSPACE" || exit 2
-                                        echo "--- Running: python3 itsm.py --grid $GRID --account $ACCOUNT ---"
-                                        python3 itsm.py --grid "$GRID" --account "$ACCOUNT" < /dev/null
+                                        echo "--- Running: python3 itsm.py --grid $GRID --account $ACCOUNT $FULL_FLAG ---"
+                                        python3 itsm.py --grid "$GRID" --account "$ACCOUNT" $FULL_FLAG < /dev/null
                                     ''')
+                                }
                                 }
                             } catch (e) {
                                 if (!String.valueOf(e.message).toLowerCase().contains('credentials')) { throw e }
@@ -651,7 +695,7 @@ pipeline {
                                 ])
                                 archiveArtifacts artifacts: 'suite-report/**', allowEmptyArchive: false
                                 if (fileExists('suite-report/junit.xml')) {
-                                    junit testResults: 'suite-report/junit.xml', allowEmptyResults: true, skipMarkingBuildUnstable: true
+                                    junit testResults: 'suite-report/junit*.xml', allowEmptyResults: true, skipMarkingBuildUnstable: true
                                 }
                             }
 

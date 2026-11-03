@@ -463,6 +463,11 @@ def main():
                          "(response time) cycle + ONE summary report. The "
                          "event monitor/profile come from accounts/<acct>/"
                          "events.json")
+    ap.add_argument("--itoc360-jenkins-login", action="store_true",
+                    help="sign in to iTOC360 once more, as a SEPARATE session "
+                         "for Jenkins; saved to accounts/<acct>/"
+                         ".itoc360_jenkins_state.json (git-ignored), then "
+                         "upload with: python3 jenkins_secrets.py")
     ap.add_argument("--itoc360-login", action="store_true",
                     help="sign in to iTOC360 once in a browser window, so "
                          "the suite can read iTOC360 alerts")
@@ -589,6 +594,18 @@ def main():
         if rc != 0:
             log("\n  Could not capture the list. Is this account logged in?")
             log(f"    python3 itsm.py -a {name} --login-only")
+        sys.exit(rc)
+
+    if args.itoc360_jenkins_login:
+        # Its own browser profile: Jenkins and this Mac must never share one
+        # iTOC360 session (each refresh would sign the other one out).
+        env["ITOC_PROFILE_DIR"] = os.path.join(
+            os.path.expanduser("~"), f".s247-itoc360-profile-{name}-jenkins")
+        state = os.path.join(d, ".itoc360_jenkins_state.json")
+        rc = run(["node", os.path.join(HERE, "itoc360_login.js"), "--setup",
+                  "--export-state", state], env, d, "itoc360_login.js")
+        if rc == 0:
+            log("\n  Next: upload it to Jenkins:  python3 jenkins_secrets.py")
         sys.exit(rc)
 
     if args.itoc360_login:

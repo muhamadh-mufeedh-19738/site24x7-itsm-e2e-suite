@@ -73,3 +73,6 @@ accounts/*/itoc360_*.json
 # event-based cycle (run data)
 accounts/*/stage2c_result.json
 accounts/*/events_backup_*.json
+
+# iTOC360 session exported for Jenkins (secret)
+accounts/*/.itoc360_jenkins_state.json
