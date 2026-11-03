@@ -66,3 +66,6 @@ logs/
 accounts/*/stage0_*.json
 .jenkins_uploaded.json
 Claude outputs/
+
+# iTOC360 alerts read inside the tool per run (run data)
+accounts/*/itoc360_*.json

@@ -66,7 +66,7 @@ import subprocess
 import sys
 import time
 import xml.sax.saxutils as sx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Where the CODE lives. The working directory may be a per-account data
 # folder, so sibling scripts must be found relative to this file, not cwd.
@@ -489,6 +489,123 @@ def collab_check(app, entry, expected):
             f"successful {app} delivery for each state: "
             + "; ".join(f"{x['state']} at {x['sent_at']}" for x in steps)
             + ".", info)
+
+
+ITOC_APP = "iTOC360"
+
+
+def _local_to_utc_iso(text):
+    """stage2b's local 'YYYY-MM-DD HH:MM:SS' -> UTC ISO for iTOC360's API."""
+    try:
+        return (datetime.strptime(text, "%Y-%m-%d %H:%M:%S").astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def read_itoc360(mid, since, until, fresh):
+    """Read this monitor's alerts INSIDE iTOC360 (itoc360_alerts.js) and keep
+    them in itoc360_<mid>.json. --report-only reuses the saved file."""
+    path = f"itoc360_{mid}.json"
+    s_utc = _local_to_utc_iso(since)
+    if fresh and s_utc:
+        argv = ["node", script("itoc360_alerts.js"), "--monitor-id", str(mid),
+                "--since", s_utc, "--out", path]
+        u_utc = _local_to_utc_iso(until) if until else None
+        if u_utc:
+            argv += ["--until", u_utc]
+        for attempt in (1, 2):
+            try:
+                subprocess.run(argv, timeout=300)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log(f"  [WARN] iTOC360 read failed: {exc}")
+                break
+            data = load_json(path) or {}
+            # iTOC360 can record the recovery a little after Site24x7 sends
+            # it; give an unresolved alert one more minute before judging.
+            still_open = [a for a in data.get("alerts") or []
+                          if a.get("status") != "RESOLVE"]
+            if attempt == 1 and data.get("ok") and still_open:
+                log("  [wait] an iTOC360 alert is not resolved yet — "
+                    "re-reading in 60s")
+                time.sleep(60)
+                continue
+            break
+    return load_json(path)
+
+
+def _iso_to_local(text):
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00")) \
+            .astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return str(text or "")
+
+
+def itoc360_check(data, expected):
+    """Verdict from what iTOC360 itself recorded: one event per state the
+    monitor went through, and every alert resolved at the end.
+    Returns (bucket, headline, detail, info)."""
+    if not data:
+        return (BLOCKED, "iTOC360 was not read in this run",
+                "The in-tool check did not run, so iTOC360 was not verified. "
+                "Not a product verdict.", None)
+    if not data.get("ok"):
+        return (BLOCKED, "Could not read inside iTOC360",
+                f"{data.get('message')}. Not a product verdict.", None)
+    alerts = data.get("alerts") or []
+    events = sorted(((ev, a) for a in alerts for ev in a.get("events") or []),
+                    key=lambda x: str(x[0].get("created_at") or ""))
+    route = " → ".join(expected)
+    steps, missing, used = [], [], set()
+    for state in expected:
+        hit = next((i for i, (ev, a) in enumerate(events)
+                    if i not in used and str(ev.get("status") or "").upper()
+                    == state), None)
+        if hit is None:
+            missing.append(state)
+            steps.append({"state": state, "ok": False, "sent_at": None,
+                          "message": None,
+                          "why": f"no {state} event recorded in iTOC360"})
+            continue
+        used.add(hit)
+        ev, a = events[hit]
+        steps.append({"state": state, "ok": True,
+                      "sent_at": _iso_to_local(ev.get("created_at")),
+                      "message": f"{ev.get('type')} event in iTOC360 alert "
+                                 f"{a.get('id')}",
+                      "why": None})
+    info = {"app": ITOC_APP, "route": route, "steps": steps,
+            "time_label": "Recorded in iTOC360 at",
+            "msg_label": "What iTOC360 recorded",
+            "alerts": [{"id": a.get("id"), "status": a.get("status"),
+                        "created": _iso_to_local(a.get("created_at")),
+                        "resolved": _iso_to_local(a.get("resolved_at"))
+                        if a.get("resolved_at") else None} for a in alerts]}
+    ids = ", ".join(a.get("id") for a in alerts)
+    if not alerts:
+        return (DEFECT, "Site24x7 sent the alerts, but iTOC360 has NO alert "
+                "for this monitor",
+                f"The monitor went {route}. iTOC360 was searched for alerts "
+                f"with this MONITOR_ID created in the cycle window and none "
+                f"exist, so the alerts never became iTOC360 alerts.", info)
+    if missing:
+        return (DEFECT, f"iTOC360 is missing events ({', '.join(missing)})",
+                f"The monitor went {route}. iTOC360 alert(s) {ids} hold: "
+                + "; ".join(f"{x['state']} — "
+                            + (f"recorded {x['sent_at']}" if x["ok"]
+                               else x["why"]) for x in steps) + ".", info)
+    open_ = [a for a in alerts if a.get("status") != "RESOLVE"]
+    if open_:
+        return (DEFECT, "iTOC360 alert NOT resolved after the monitor "
+                "recovered",
+                f"The monitor went {route} and iTOC360 recorded every event, "
+                f"but alert(s) {', '.join(a.get('id') for a in open_)} are "
+                f"still '{open_[0].get('status')}' instead of RESOLVE.", info)
+    return (PASS, f"Alert created and resolved inside iTOC360 ({route})",
+            f"Read inside iTOC360: alert(s) {ids} for this monitor recorded "
+            + "; ".join(f"{x['state']} at {x['sent_at']}" for x in steps)
+            + ", and the alert is RESOLVE.", info)
 
 
 def _real_integrations(data):
@@ -1101,7 +1218,8 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
 
 
 def build_findings(stage3, stage4, known, live_recs=None,
-                   trigger_blocked=None, scope=None, expected_states=None):
+                   trigger_blocked=None, scope=None, expected_states=None,
+                   itoc360=None):
     s4_by_integ = {}
     for e in (stage4 or {}).get("results", []):
         s4_by_integ[str(e.get("integration", "")).lower()] = e
@@ -1217,6 +1335,15 @@ def build_findings(stage3, stage4, known, live_recs=None,
                       f"ticket. Whether the ticket was created and resolved "
                       f"inside {app_nm} has not been checked. Needs read "
                       f"access to {app_nm} to verify. Not a product verdict.")
+        # iTOC360: the verdict comes from iTOC360 itself (alert + one event
+        # per state + resolved), read by itoc360_alerts.js. Replaces the
+        # Alert-Log-only result above, including the false-PASS guard.
+        itoc_info = None
+        if rec is not None and app_label(rec) == ITOC_APP \
+                and integ_st == "active" and not known_note(integ, known) \
+                and expected_states is not None:
+            bucket, headline, detail, itoc_info = itoc360_check(
+                itoc360, expected_states)
         # COLLABORATION (Slack, Discord, ...): any delivery row was enough
         # above. Here every state the monitor went through must have its own
         # successful delivery, so a missing TROUBLE alert is caught.
@@ -1312,14 +1439,39 @@ def build_findings(stage3, stage4, known, live_recs=None,
                                        f"(monitor name + cycle window)",
                     "cassandra_value": tid, "operation": "create",
                     "alert_status": t.get("status")}
+        tool_tickets = (s4 or {}).get("tickets") or []
+        tool_name, tool_verdict = (s4 or {}).get("tool"), (s4 or {}).get("verdict")
+        if itoc_info is not None:
+            # The iTOC360 alert ids ARE the ticket ids a developer debugs
+            # with; Site24x7's WH_ reference is kept only as evidence.
+            created_ids = [a["id"] for a in itoc_info["alerts"]]
+            closed_ids = [a["id"] for a in itoc_info["alerts"]
+                          if a["status"] == "RESOLVE"]
+            matched_ids = list(closed_ids)
+            for a in itoc_info["alerts"]:
+                db_evidence[a["id"]] = {
+                    "ticket_id_source": "found in tool (not in Alert Log)",
+                    "cassandra_field": "iTOC360 alerts (MONITOR_ID + cycle "
+                                       "window)",
+                    "cassandra_value": a["id"], "operation": "create",
+                    "alert_status": a["status"]}
+            tool_tickets = [{"ticket_id": a["id"], "found": True,
+                             "status": a["status"], "found_by": "iTOC360",
+                             "open": a["status"] != "RESOLVE"}
+                            for a in itoc_info["alerts"]]
+            tool_name = ITOC_APP
+            # _tool_cell reads the first word: PASS / FAIL / BLOCKED
+            tool_verdict = (f"{ {DEFECT: 'FAIL'}.get(bucket, bucket)} "
+                            f"{headline}")
         findings.append({
             "integration": integ,
             "bucket": bucket,
             "headline": headline,
             "detail": detail,
+            "itsm_steps": itoc_info,
             "site24x7_verdict": e.get("verdict"),
-            "tool_verdict": (s4 or {}).get("verdict"),
-            "tool": (s4 or {}).get("tool"),
+            "tool_verdict": tool_verdict,
+            "tool": tool_name,
             "created_ticket_ids": created_ids,
             "closed_ticket_ids": closed_ids,
             "updated_ticket_ids": e.get("updated_ticket_ids") or [],
@@ -1329,7 +1481,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "failed_rows": e.get("failed_rows"),
             "notify_only": notify_only,
             "collab": collab,
-            "tool_tickets": (s4 or {}).get("tickets") or [],
+            "tool_tickets": tool_tickets,
             # WEB_MON DB evidence — proves ticket IDs came from
             # WM_ALERT_LOGS.RequestMessageId (Cassandra), not guessed.
             "webmon_db_evidence": db_evidence,
@@ -1785,9 +1937,11 @@ def write_html(path, ctx):
                     f'(extra)</td><td class="mono">{esc(d["sent_at"])}</td>'
                     f'<td style="font-size:12.5px">{esc(d["message"])}</td>'
                     f'<td>not part of the route</td></tr>')
+        t_lbl = c.get("time_label") or f'Sent to {c["app"]} at'
+        m_lbl = c.get("msg_label") or "Alert Log message"
         return (f'<table><tr><th style="width:110px">State</th>'
-                f'<th style="width:170px">Sent to {esc(c["app"])} at</th>'
-                f'<th>Alert Log message</th><th style="width:200px">Result</th>'
+                f'<th style="width:170px">{esc(t_lbl)}</th>'
+                f'<th>{esc(m_lbl)}</th><th style="width:200px">Result</th>'
                 f'</tr>{trs}</table>')
 
     def _evidence_card(x):
@@ -1824,7 +1978,7 @@ def write_html(path, ctx):
 <tr><th>Alert log rows</th><td class="mono">{esc(x['alert_log_rows'])} (failed deliveries: {esc(x['failed_rows'])})</td></tr>
 <tr><th>Verified in tool</th><td>{esc(x['tool'] or 'not checked')}</td></tr>
 <tr><th style="color:#6e7681;font-size:11px">Ticket ID source (DB)</th><td style="font-size:11px;color:#6e7681;font-family:monospace">{db_evidence_html(x.get('webmon_db_evidence', {}))}</td></tr>
-</table>{tool_tbl}</div>"""
+</table>{tool_tbl}{_collab_table(x["itsm_steps"]) if x.get("itsm_steps") else ""}</div>"""
 
     # Evidence grouped by verdict (worst first). Each group has an anchor
     # (#ev-DEFECT, #ev-BLOCKED, ...) that the Executive summary tiles link
@@ -3044,9 +3198,21 @@ def main():
             except Exception as exc:  # noqa: BLE001
                 log(f"  [WARN] could not snapshot results for {mid}: {exc}")
 
+        # iTOC360 returns no ticket id to Site24x7, so its alerts are read
+        # inside iTOC360 itself -- only when this monitor alerted it.
+        itoc = None
+        itoc_names = {str(r.get("name")) for r in (load_integration_records()
+                                                   or [])
+                      if app_label(r) == ITOC_APP}
+        if itoc_names and any(str(r.get("integration")) in itoc_names
+                              for r in ((s3 or {}).get("results") or [])):
+            section(f"iTOC360 — READ INSIDE THE TOOL — {label}")
+            itoc = read_itoc360(mid, cycle_since, cycle_until,
+                                fresh=not args.report_only and not args.dry_run)
         per_monitor.append({"monitor_id": mid, "name": name,
                             "monitor_type": mon_type,
-                            "blocked": False, "stage3": s3, "stage4": s4})
+                            "blocked": False, "stage3": s3, "stage4": s4,
+                            "itoc360": itoc})
 
     if args.dry_run:
         section("DRY RUN COMPLETE")
@@ -3176,7 +3342,8 @@ def main():
                                   trigger_blocked=trigger_blocked_integrations,
                                   scope=scope,
                                   expected_states=expected_states_for(
-                                      cycle, pm["monitor_id"])):
+                                      cycle, pm["monitor_id"]),
+                                  itoc360=pm.get("itoc360")):
             # DELETED integrations: they appear in alert log history but
             # no longer exist in integrations.json. Do NOT silently drop
             # them — show them with a clear DELETED headline so the tester

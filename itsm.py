@@ -440,6 +440,9 @@ def main():
                     help="capture the LIVE third-party integration list for "
                          "this account, so deleted integrations stop "
                          "appearing in reports")
+    ap.add_argument("--itoc360-login", action="store_true",
+                    help="sign in to iTOC360 once in a browser window, so "
+                         "the suite can read iTOC360 alerts")
     ap.add_argument("--inventory", action="store_true",
                     help="rebuild this account's monitor inventory "
                          "(test_config.json). Read-only against Site24x7.")
@@ -563,6 +566,11 @@ def main():
         if rc != 0:
             log("\n  Could not capture the list. Is this account logged in?")
             log(f"    python3 itsm.py -a {name} --login-only")
+        sys.exit(rc)
+
+    if args.itoc360_login:
+        js = os.path.join(HERE, "itoc360_login.js")
+        rc = run(["node", js, "--setup"], env, d, "itoc360_login.js")
         sys.exit(rc)
 
     if args.inventory:
