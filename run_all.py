@@ -776,7 +776,10 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
                 (note + " " if note else "") +
                 f"Site24x7 recorded a failed delivery. No ticket was ever "
                 f"created. Failed rows in window: "
-                f"{stage3_entry.get('failed_rows', '?')}.")
+                f"{stage3_entry.get('failed_rows', '?')}."
+                + ("".join(f" {st} → {why.strip()[:160]};" for st, why in
+                           sorted((stage3_entry.get("failed_reasons")
+                                   or {}).items()))))
 
     # --- 1b. product-side PROOF of a complete lifecycle outranks a missing
     #         or blocked tool-side check, exactly as a product-side FAIL does
@@ -1046,6 +1049,29 @@ def build_findings(stage3, stage4, known, live_recs=None,
                           f"its tickets cannot be verified. Point the "
                           f"integration at {checked} in Site24x7 (or change "
                           f"SNOW_URL) and re-run. Not a product verdict.")
+
+        # ServiceNow with "Action on Recovery" = Manual Close (0) leaves the
+        # ticket open ON PURPOSE. The integration's own config says so, so
+        # decide from it instead of guessing from the integration NAME
+        # ("Snow Sanity" was reported as a DEFECT on 3 Nov).
+        open_by_design = (
+            "Ticket created; still open after recovery",
+            "Recovery alert WAS delivered, but the ticket was still not closed",
+            "Recovery alert delivered — UP work-note row exists but could not "
+            "be matched to a ticket created in THIS cycle")
+        if rec is not None and bucket in (DEFECT, INCONCLUSIVE) \
+                and headline in open_by_design \
+                and (s4 or {}).get("tool") == "ServiceNow" \
+                and not int(e.get("failed_rows") or 0) \
+                and str((rec.get("raw") or {}).get("action_on_availability")) == "0":
+            bucket = PASS
+            headline = ("Ticket created; recovery delivered — left open by "
+                        "design (Action on Recovery = Manual Close)")
+            detail = (f"'{integ}' is configured with Action on Recovery = "
+                      f"Manual Close, so Site24x7 posts the recovery to the "
+                      f"ticket and leaves it open for a person to close. The "
+                      f"problem alert created the ticket and the recovery was "
+                      f"delivered with no failed rows. " + detail)
         if notify_only and integ_st == "active" and bucket == BLOCKED \
                 and headline == "No tool-side verification configured":
             rows_n = int(e.get("rows") or 0)

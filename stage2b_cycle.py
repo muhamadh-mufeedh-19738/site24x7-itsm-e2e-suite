@@ -693,6 +693,26 @@ def main():
     # ---- 1. select monitors ----------------------------------------------
     section("1. SELECTING MONITORS")
     mons = cfg.get("monitors") or []
+    # FIX: test_config.json is a cached inventory (tpt/tpt1: 23 Oct). A
+    # monitor created after it was silently never tested even when it was
+    # on the allowlist. Fetch allowlisted ids the cache does not have.
+    allow_ids = [str(i) for i in ((load_allowlist() or {}).get("monitor_ids")
+                                  or [])]
+    known_ids = {str(m.get("monitor_id")) for m in mons}
+    missing = [i for i in allow_ids if i not in known_ids]
+    if missing:
+        _, live = api(grid, "/api/monitors", token)
+        by_id = {str(m.get("monitor_id")): m
+                 for m in ((live or {}).get("data") or [])}
+        for i in missing:
+            if i in by_id:
+                mons.append({"monitor_id": i,
+                             "name": by_id[i].get("display_name") or i})
+                log(f"  [note] {by_id[i].get('display_name')} ({i}) is on the "
+                    f"allowlist but not in {CONFIG_FILE}; read it live.")
+            else:
+                log(f"  [WARN] allowlisted monitor {i} does not exist in this "
+                    f"account — remove it from {ALLOWLIST_FILE}.")
     if not mons:
         die("No monitors in test_config.json. Run stage1_inventory.py.")
 
