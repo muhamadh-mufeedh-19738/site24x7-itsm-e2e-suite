@@ -1,1 +1,4 @@
-{"PagerDuty Automation": "TRIAGED: delivery fails with Invalid routing key. Integration config issue, out of scope for this suite."}
+{
+  "PagerDuty Automation": "TRIAGED: delivery fails with Invalid routing key. Integration config issue, out of scope for this suite.",
+  "Desk Sanity": "IGNORED FOR NOW (owner decision, 3 Nov 2026): the Zoho Desk trial has expired; being checked with the Desk team. Not tested until the Desk account is active again."
+}

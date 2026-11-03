@@ -506,11 +506,9 @@ def load_known_issues():
 
 
 def known_note(integration, known):
-    n = (integration or "").lower()
-    for key, note in known.items():
-        if key in n or n in key:
-            return note
-    return None
+    # Exact name only. A substring match let an entry for "Desk Sanity"
+    # also silence an unrelated integration called "Sanity".
+    return known.get((integration or "").strip().lower())
 
 
 # ==========================================================================
@@ -1073,6 +1071,13 @@ def build_findings(stage3, stage4, known, live_recs=None,
                     f"to pass too, confirm the OAuth 'admin' scope / session "
                     f"cookie used by stage0_trigger_test.py.")
                 # bucket / headline stay as the PASS classify() produced.
+            elif known_note(integ, known):
+                # Owner has marked this integration as a known, tracked
+                # issue: keep it visible but grey, not a BLOCKED alarm.
+                bucket = KNOWN
+                headline = "Known issue — not tested in this run"
+                detail = (f"KNOWN: {known_note(integ, known)} (Stage 0 "
+                          f"trigger test also failed.)")
             else:
                 before_bucket, before_headline = bucket, headline
                 bucket = BLOCKED
@@ -1157,8 +1162,9 @@ def build_findings(stage3, stage4, known, live_recs=None,
                 # test card says, not INCONCLUSIVE (which also left the
                 # BLOCKED tile at 0 while the card said "BLOCKED").
                 bucket = KNOWN if note else BLOCKED
-                headline = ("⛔ Pre-flight trigger test FAILED — integration "
-                            "misconfigured")
+                headline = ("Known issue — not tested in this run" if note
+                            else "⛔ Pre-flight trigger test FAILED — "
+                                 "integration misconfigured")
                 detail = (
                     f"'{integ}' failed the Stage 0 pre-flight trigger test "
                     f"(Site24x7 rejected 'Trigger Test' for it), and it then "

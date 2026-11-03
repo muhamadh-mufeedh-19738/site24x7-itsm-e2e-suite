@@ -1,1 +1,4 @@
-{"PagerDuty Automation": "TRIAGED: delivery fails with Invalid routing key. Integration config issue, out of scope for this suite."}
+{
+  "PagerDuty Automation": "TRIAGED: delivery fails with Invalid routing key. Integration config issue, out of scope for this suite.",
+  "topdesk": "IGNORED FOR NOW (owner decision, 3 Nov 2026): Site24x7 rejects this integration's trigger test (HTTP 500). Not tested until it is re-configured."
+}
