@@ -112,6 +112,11 @@ SN_SYS_ID_RE = re.compile(r"\b([0-9a-f]{32})\b", re.I)  # 32-char hex UUID
 #   29 = FreshService     30 = VictorOps         31 = FreshDesk
 #   32 = Zendesk          33 = Discord           52 = HaloITSM
 #
+# CORRECTION (3 Nov 2026): Discord is 30, not 33. Web_Mon
+# ThirdPartyServices.java: DISCORD(26, ..., alertType 30), and the
+# automation account's Alert Logs show communicationmode=30 for
+# 'Discord Sanity'. Slack = 7 is confirmed the same way.
+#
 # To field: written by AlertLogs.addAlertLogToApplog():
 #     tpJsonArray.add(prop.get("integration_name"));
 #     jsonObject.put("To", tpJsonArray);
@@ -145,8 +150,8 @@ MODE_INT_TO_TOOL = {
     29: "freshservice",
     30: "victorops",
     31: "freshdesk",
+    30: "discord",      # live: Discord Sanity rows (was 33, wrong)
     32: "zendesk",
-    33: "discord",
     52: "haloitsm",
 }
 
@@ -717,6 +722,19 @@ def cmd_verify(args):
                 # keep the product's own error text for the developer
                 rec.setdefault("failed_reasons", {}).setdefault(
                     st_txt, str(msg)[:200])
+            # Every delivery row, one per alert. Chat tools (Slack, Discord)
+            # create no ticket, so the per-state rows ARE the evidence: the
+            # report checks one row per state the monitor went through.
+            when_raw = None
+            for k in ("_zl_timestamp", "_zl_received_time"):
+                if e.get(k):
+                    when_raw = e.get(k)
+                    break
+            rec.setdefault("deliveries", []).append({
+                "status": st_txt, "time_raw": when_raw,
+                "message": str(msg).strip()[:300],
+                "failed": ("fail" in blob or "invalid" in blob
+                           or "error" in blob)})
             op = OP_RE.search(msg)
 
             # ----------------------------------------------------------------
@@ -1255,6 +1273,8 @@ def cmd_verify(args):
                     "delivery_modes": sorted(rec.get("modes", [])),
                     "failed_statuses": sorted(rec.get("failed_statuses", [])),
                     "failed_reasons": rec.get("failed_reasons", {}),
+                    "deliveries": sorted(rec.get("deliveries", []),
+                                         key=lambda d: str(d.get("time_raw") or "")),
                     "failed_rows": rec["failed"], "verdict": verdict})
 
     section("MATCHED TICKETS (the proof)")

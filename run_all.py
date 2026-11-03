@@ -337,7 +337,14 @@ APP_IDS = {
     "18": "Zoho Cliq",
     "21": "Telegram",
     "26": "Discord",
+    "9": "Microsoft Teams",
 }
+
+# COLLABORATION tools: they post a message for every state change and never
+# create a ticket. Each state the monitor went through (TROUBLE, DOWN, UP)
+# must have its own delivery row, so a missing TROUBLE alert is a defect even
+# when DOWN and UP arrived. Decided by the app type, never the name.
+COLLAB_APPS = ("Slack", "Discord", "Microsoft Teams", "Zoho Cliq", "Telegram")
 
 
 def app_ids():
@@ -389,6 +396,88 @@ def is_itsm(entry):
     NAME_HINTS = ("servicenow", "service-now", "snow", "desk", "sdp",
                   "servicedesk", "halo", "pagerduty", "pager duty")
     return any(k in n for k in NAME_HINTS)
+
+
+def collab_app(entry):
+    """'Slack' / 'Discord' / ... for a collaboration integration, else None."""
+    if not entry:
+        return None
+    label = app_label(entry)
+    return label if label in COLLAB_APPS else None
+
+
+def _ms_to_local(raw):
+    """Alert-log _zl_timestamp (epoch ms) -> 'YYYY-MM-DD HH:MM:SS' local."""
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000).strftime(
+            "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return str(raw or "")
+
+
+def expected_states_for(cycle, monitor_id):
+    """The states one monitor went through in this cycle, in order, e.g.
+    ['TROUBLE', 'DOWN', 'UP'] or ['DOWN', 'TROUBLE', 'UP']. The baseline UP
+    before the first problem state sends no alert, so it is dropped."""
+    seq = [str(t.get("observed_status") or "").upper()
+           for t in ((cycle or {}).get("transitions") or [])
+           if str(t.get("monitor_id")) == str(monitor_id)]
+    while seq and seq[0] == "UP":
+        seq.pop(0)
+    return [x for x in seq if x]
+
+
+def collab_check(app, entry, expected):
+    """One step per expected state: was it delivered, and was it clean?
+    Returns (bucket, headline, detail, info)."""
+    deliveries = list(entry.get("deliveries") or [])
+    steps, missing, failed = [], [], []
+    used = set()
+    for state in expected:
+        row = next((i for i, d in enumerate(deliveries)
+                    if i not in used and d.get("status") == state), None)
+        if row is None:
+            missing.append(state)
+            steps.append({"state": state, "ok": False, "sent_at": None,
+                          "message": None,
+                          "why": f"no {state} alert was sent to {app}"})
+            continue
+        used.add(row)
+        d = deliveries[row]
+        ok = not d.get("failed")
+        if not ok:
+            failed.append(state)
+        steps.append({"state": state, "ok": ok,
+                      "sent_at": _ms_to_local(d.get("time_raw")),
+                      "message": d.get("message"),
+                      "why": None if ok else "Site24x7 logged a FAILED delivery"})
+    extra = [d for i, d in enumerate(deliveries) if i not in used]
+    route = " → ".join(expected)
+    info = {"app": app, "route": route, "steps": steps,
+            "extra_rows": [{"status": d.get("status"),
+                            "sent_at": _ms_to_local(d.get("time_raw")),
+                            "message": d.get("message")} for d in extra],
+            "channel_check": "not read back — the hook URL can only post, "
+                             "so the message was not re-read from the "
+                             "channel (needs a read-only key)"}
+    if not expected:
+        return (INCONCLUSIVE, f"{app}: the cycle recorded no state changes "
+                f"for this monitor", "Nothing to compare the deliveries "
+                f"against. Re-run the cycle.", info)
+    if missing or failed:
+        bad = ", ".join([f"{x} not sent" for x in missing]
+                        + [f"{x} failed" for x in failed])
+        return (DEFECT, f"{app} did NOT get every alert ({bad})",
+                f"The monitor went {route}. {app} must receive one alert per "
+                f"state. Site24x7's Alert Logs show: "
+                + "; ".join(f"{x['state']} — "
+                            + (f"sent {x['sent_at']}" if x["ok"]
+                               else x["why"]) for x in steps) + ".", info)
+    return (PASS, f"{app} received every alert ({route})",
+            f"The monitor went {route} and Site24x7's Alert Logs show one "
+            f"successful {app} delivery for each state: "
+            + "; ".join(f"{x['state']} at {x['sent_at']}" for x in steps)
+            + ".", info)
 
 
 def _real_integrations(data):
@@ -1001,7 +1090,7 @@ def classify(stage3_entry, stage4_entry, known, integ_status="active"):
 
 
 def build_findings(stage3, stage4, known, live_recs=None,
-                   trigger_blocked=None, scope=None):
+                   trigger_blocked=None, scope=None, expected_states=None):
     s4_by_integ = {}
     for e in (stage4 or {}).get("results", []):
         s4_by_integ[str(e.get("integration", "")).lower()] = e
@@ -1091,6 +1180,15 @@ def build_findings(stage3, stage4, known, live_recs=None,
                           f"Site24x7's Alert Logs show {failed_n} FAILED delivery "
                           f"row(s) out of {rows_n} in this cycle, so some alerts "
                           f"did not reach it.")
+        # COLLABORATION (Slack, Discord, ...): any delivery row was enough
+        # above. Here every state the monitor went through must have its own
+        # successful delivery, so a missing TROUBLE alert is caught.
+        collab = None
+        app = collab_app(rec)
+        if app and integ_st == "active" and not known_note(integ, known) \
+                and expected_states is not None:
+            bucket, headline, detail, collab = collab_check(
+                app, e, expected_states)
         # TRIGGER TEST override: a GENUINE pre-flight FAIL (wrong API key,
         # expired OAuth, bad instance URL, dead destination) means the
         # integration was broken from the start, so a lifecycle "defect" for
@@ -1193,6 +1291,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "alert_log_rows": e.get("rows"),
             "failed_rows": e.get("failed_rows"),
             "notify_only": notify_only,
+            "collab": collab,
             "tool_tickets": (s4 or {}).get("tickets") or [],
             # WEB_MON DB evidence — proves ticket IDs came from
             # WM_ALERT_LOGS.RequestMessageId (Cassandra), not guessed.
@@ -1249,6 +1348,29 @@ def build_findings(stage3, stage4, known, live_recs=None,
                     f"integration in Site24x7 → Third-Party Integrations → "
                     f"Edit, press Trigger Test there until it succeeds, then "
                     f"re-run." + (f" KNOWN: {note}" if note else ""))
+            elif collab_app(rec) and expected_states \
+                    and not note \
+                    and str((rec.get("raw") or {}).get("selection_type")) == "0":
+                # A chat tool set to "All monitors" MUST have posted for this
+                # monitor's state changes. Nothing at all is the worst miss.
+                bucket, headline, detail, _c = collab_check(
+                    collab_app(rec), {}, expected_states)
+                headline = (f"{collab_app(rec)} received NOTHING for this "
+                            f"monitor ({_c['route']})")
+                detail = (f"'{integ}' is active and set to All monitors, but "
+                          f"Site24x7's Alert Logs have no delivery to it in "
+                          f"this cycle's window. " + detail)
+                findings.append({
+                    "integration": integ, "bucket": bucket,
+                    "headline": headline, "detail": detail,
+                    "monitor_type": "", "site24x7_verdict": "NO ALERT LOG ROWS",
+                    "tool_verdict": None, "tool": None,
+                    "created_ticket_ids": [], "closed_ticket_ids": [],
+                    "updated_ticket_ids": [], "matched_ticket_ids": [],
+                    "matched_on_up_ticket_ids": [], "alert_log_rows": 0,
+                    "failed_rows": 0, "notify_only": True, "collab": _c,
+                    "tool_tickets": [], "webmon_db_evidence": {}})
+                continue
             else:
                 # Active but no alert log rows — a real gap to investigate
                 bucket = KNOWN if note else INCONCLUSIVE
@@ -1441,6 +1563,9 @@ def lifecycle_steps_html(finding):
                 f'margin:1px 3px 1px 0;font-size:11px;font-weight:600;'
                 f'color:{col};white-space:nowrap">{ico} {esc(text)}</span>')
 
+    if finding.get("collab"):
+        return "".join(chip(st["ok"], st["state"])
+                       for st in finding["collab"]["steps"])
     if finding.get("notify_only"):
         ok = bucket == PASS
         return chip(ok, "Alert delivered" if ok else "Delivery failed")
@@ -1554,6 +1679,9 @@ def write_html(path, ctx):
         return f'<span style="color:#1a7f37">{esc(txt)} ✓</span>'
 
     def _tool_cell(x):
+        if x.get("collab"):
+            return ('<span style="color:#8b949e">not read back &mdash; hook '
+                    'URL only (no read key)</span>')
         if x.get("notify_only"):
             return ('<span style="color:#57606a">not needed &mdash; chat / '
                     'notification tool (no ticket)</span>')
@@ -1606,7 +1734,38 @@ def write_html(path, ctx):
 <td style="font-size:12px">{_alertlog_cell(x)}</td>
 <td style="font-size:12px">{_tool_cell(x)}</td></tr>"""
 
+    def _collab_table(c):
+        trs = ""
+        for st in c["steps"]:
+            res = ('<span class="ok">✓ sent</span>' if st["ok"]
+                   else f'<span class="bad">✗ {esc(st["why"])}</span>')
+            trs += (f'<tr><td><strong>{esc(st["state"])}</strong></td>'
+                    f'<td class="mono">{esc(st["sent_at"] or "—")}</td>'
+                    f'<td style="font-size:12.5px">{esc(st["message"] or "—")}</td>'
+                    f'<td>{res}</td></tr>')
+        for d in c.get("extra_rows") or []:
+            trs += (f'<tr style="color:#57606a"><td>{esc(d["status"])} '
+                    f'(extra)</td><td class="mono">{esc(d["sent_at"])}</td>'
+                    f'<td style="font-size:12.5px">{esc(d["message"])}</td>'
+                    f'<td>not part of the route</td></tr>')
+        return (f'<table><tr><th style="width:110px">State</th>'
+                f'<th style="width:170px">Sent to {esc(c["app"])} at</th>'
+                f'<th>Alert Log message</th><th style="width:200px">Result</th>'
+                f'</tr>{trs}</table>')
+
     def _evidence_card(x):
+        if x.get("collab"):
+            c = x["collab"]
+            return f"""<div class="card b-{x['bucket']}">
+<span class="pill {x['bucket']}">{x['bucket']}</span>
+<div class="hd">{esc(x.get('monitor'))} &nbsp;/&nbsp; {esc(x['integration'])} &mdash; {esc(x['headline'])}</div>
+<p class="det">{esc(x['detail'])}</p>
+<table>
+<tr><th style="width:190px">Collaboration tool</th><td>{esc(c['app'])} (no ticket &mdash; one message per state change)</td></tr>
+<tr><th>Route driven</th><td class="mono">{esc(c['route'])}</td></tr>
+<tr><th>Alert log rows</th><td class="mono">{esc(x['alert_log_rows'])} (failed deliveries: {esc(x['failed_rows'])})</td></tr>
+<tr><th>Message in the channel</th><td>{esc(c['channel_check'])}</td></tr>
+</table>{_collab_table(c)}</div>"""
         tool_rows = ""
         for t in x["tool_tickets"]:
             state = ("found" if t.get("found") else "NOT FOUND")
@@ -1855,6 +2014,30 @@ def write_html(path, ctx):
                                     "for this report.")
                            + '</p>')
 
+    collab_rows = [x for x in f if x.get("collab")]
+    if collab_rows:
+        ch = ""
+        for x in sorted(collab_rows, key=lambda y: (str(y.get("monitor")),
+                                                     str(y["integration"]))):
+            ch += (f'<tr class="b-{x["bucket"]}"><td>{esc(x.get("monitor"))}</td>'
+                   f'<td><strong>{esc(x["integration"])}</strong>'
+                   f'<div style="font-size:10.5px;color:#57606a">'
+                   f'{esc(x["collab"]["app"])}</div></td>'
+                   f'<td><span class="pill {x["bucket"]}">{x["bucket"]}</span></td>'
+                   f'<td>{lifecycle_steps_html(x)}</td></tr>'
+                   f'<tr><td colspan="4" style="padding-top:0">'
+                   f'{_collab_table(x["collab"])}</td></tr>')
+        collab_html = (
+            '<div class="card"><p>Slack, Discord and other chat tools create '
+            'no ticket. Each state the monitor went through must reach the '
+            'channel as its own alert, so every state is checked separately '
+            'in Site24x7&rsquo;s Alert Logs.</p>'
+            '<table><tr><th>Monitor</th><th>Integration</th><th>Result</th>'
+            f'<th>Alert per state</th></tr>{ch}</table></div>')
+    else:
+        collab_html = ('<p class="note">No collaboration integration '
+                       '(Slack, Discord, ...) took part in this run.</p>')
+
     defects = [x for x in f if x["bucket"] == DEFECT]
     if defects:
         dhtml = "".join(
@@ -1945,6 +2128,9 @@ Run started {esc(ctx['started'])} &nbsp;&middot;&nbsp; Run ended {esc(ctx['finis
 <p>Tickets found by searching each ITSM tool directly for this cycle's window. These are real-time results — not derived from Alert Logs.</p>
 {itsm_first_html}
 </div>
+
+<h2>Collaboration Verification (Slack / Discord)</h2>
+{collab_html}
 
 <h2>Results by integration</h2>
 <div class="card">
@@ -2951,7 +3137,9 @@ def main():
         for f in build_findings(pm.get("stage3"), pm.get("stage4"), known,
                                   live_recs=recs,
                                   trigger_blocked=trigger_blocked_integrations,
-                                  scope=scope):
+                                  scope=scope,
+                                  expected_states=expected_states_for(
+                                      cycle, pm["monitor_id"])):
             # DELETED integrations: they appear in alert log history but
             # no longer exist in integrations.json. Do NOT silently drop
             # them — show them with a clear DELETED headline so the tester
