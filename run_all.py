@@ -1152,6 +1152,31 @@ def build_findings(stage3, stage4, known, live_recs=None,
                     f"again. [Lifecycle result before override: "
                     f"{before_bucket} — {before_headline}]"
                 )
+        created_ids = list(e.get("created_ticket_ids") or [])
+        closed_ids = list(e.get("closed_ticket_ids") or [])
+        matched_ids = list(e.get("matched_ticket_ids") or [])
+        db_evidence = dict(e.get("webmon_db_evidence") or
+                           (s4 or {}).get("webmon_db_evidence") or {})
+        # FIX: when Site24x7 writes no ticket id into its Alert Log (SDP,
+        # ServiceNow on some alerts), stage4 finds the ticket in the tool by
+        # monitor name + cycle window -- but the report still printed "none
+        # recorded". Ticket ids are what a developer debugs with, so show
+        # them, labelled with where they came from.
+        if not created_ids:
+            for t in ((s4 or {}).get("tickets") or []):
+                tid = t.get("ticket_id")
+                if not (tid and t.get("found_by")):
+                    continue
+                created_ids.append(tid)
+                if t.get("open") is False:
+                    closed_ids.append(tid)
+                    matched_ids.append(tid)
+                db_evidence[tid] = {
+                    "ticket_id_source": "found in tool (not in Alert Log)",
+                    "cassandra_field": f"{(s4 or {}).get('tool')} search "
+                                       f"(monitor name + cycle window)",
+                    "cassandra_value": tid, "operation": "create",
+                    "alert_status": t.get("status")}
         findings.append({
             "integration": integ,
             "bucket": bucket,
@@ -1160,10 +1185,10 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "site24x7_verdict": e.get("verdict"),
             "tool_verdict": (s4 or {}).get("verdict"),
             "tool": (s4 or {}).get("tool"),
-            "created_ticket_ids": e.get("created_ticket_ids") or [],
-            "closed_ticket_ids": e.get("closed_ticket_ids") or [],
+            "created_ticket_ids": created_ids,
+            "closed_ticket_ids": closed_ids,
             "updated_ticket_ids": e.get("updated_ticket_ids") or [],
-            "matched_ticket_ids": e.get("matched_ticket_ids") or [],
+            "matched_ticket_ids": matched_ids,
             "matched_on_up_ticket_ids": e.get("matched_on_up_ticket_ids") or [],
             "alert_log_rows": e.get("rows"),
             "failed_rows": e.get("failed_rows"),
@@ -1171,8 +1196,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "tool_tickets": (s4 or {}).get("tickets") or [],
             # WEB_MON DB evidence — proves ticket IDs came from
             # WM_ALERT_LOGS.RequestMessageId (Cassandra), not guessed.
-            "webmon_db_evidence": e.get("webmon_db_evidence") or
-                                  (s4 or {}).get("webmon_db_evidence") or {},
+            "webmon_db_evidence": db_evidence,
         })
 
     # ALWAYS-PRESENT RULE: every integration that is live in the account
@@ -1458,7 +1482,10 @@ def db_evidence_html(evidence_map):
         # Green  = read directly from RequestMessageId (canonical DB field)
         # Amber  = regex fallback on Message text
         # Blue   = ServiceNow INC# extracted from Message (sys_id in DB)
-        if "SN INC#" in src:
+        if src.startswith("found in tool"):
+            colour = "#8250df"   # purple — read back from the tool itself
+            label = "✓ found in tool (not in Alert Log)"
+        elif "SN INC#" in src:
             colour = "#0969da"   # blue — SN-specific dual-ID path
             label = "✓ SN INC# (sys_id in DB)"
         elif src.startswith("RequestMessageId"):
@@ -3121,7 +3148,8 @@ def main():
     _opener = "open" if sys.platform == "darwin" else "xdg-open"
     log(f"\n  Or open from terminal:")
     log(f"    {_opener} '{html_abs}'")
-    if not os.environ.get("S247_NO_AUTO_OPEN"):
+    # Only when a person started this run in a terminal (see itsm.py).
+    if not os.environ.get("S247_NO_AUTO_OPEN") and sys.stdin.isatty():
         if open_in_browser(html_abs):
             log(f"\n  ✅  Report auto-opened in your browser.")
         else:

@@ -689,7 +689,12 @@ def main():
         # Linux desktops use 'xdg-open'. The Jenkins server has neither a
         # desktop nor a browser, so we say so instead of claiming success.
         opener = "open" if sys.platform == "darwin" else "xdg-open"
-        if shutil.which(opener):
+        # Only when a person started this run in a terminal. Background and
+        # scripted runs popped report tabs nobody asked for (3 Nov).
+        if not sys.stdin.isatty() or os.environ.get("S247_NO_AUTO_OPEN"):
+            log("\n  (Report not auto-opened: this run was not started "
+                "from a terminal. Use the link above.)")
+        elif shutil.which(opener):
             try:
                 subprocess.Popen([opener, latest_abs],
                                  stdout=subprocess.DEVNULL,
