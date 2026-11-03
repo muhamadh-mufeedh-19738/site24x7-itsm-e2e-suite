@@ -1439,6 +1439,16 @@ def build_findings(stage3, stage4, known, live_recs=None,
                                        f"(monitor name + cycle window)",
                     "cassandra_value": tid, "operation": "create",
                     "alert_status": t.get("status")}
+        # EVERY integration lists its Alert Log rows per state (CRITICAL,
+        # TROUBLE, UP...), not only the chat tools: an ITSM row that showed
+        # only "Ticket created / Recovered" hid which state was missing or
+        # failed. Display only -- the verdict above is unchanged.
+        log_steps = None
+        if collab is None and expected_states:
+            log_steps = collab_check(app_label(rec) if rec else integ, e,
+                                     expected_states)[3]
+            log_steps.update({"time_label": "Logged by Site24x7 at",
+                              "msg_label": "Alert Log message"})
         tool_tickets = (s4 or {}).get("tickets") or []
         tool_name, tool_verdict = (s4 or {}).get("tool"), (s4 or {}).get("verdict")
         if itoc_info is not None:
@@ -1469,6 +1479,7 @@ def build_findings(stage3, stage4, known, live_recs=None,
             "headline": headline,
             "detail": detail,
             "itsm_steps": itoc_info,
+            "log_steps": log_steps,
             "site24x7_verdict": e.get("verdict"),
             "tool_verdict": tool_verdict,
             "tool": tool_name,
@@ -1900,6 +1911,17 @@ def write_html(path, ctx):
             col, ico = "#57606a", "•"
         return f'<span style="color:{col}">{toolp}confirmed {ico}</span>'
 
+    def _log_chips(x):
+        ls = x.get("log_steps")
+        if not ls:
+            return ""
+        chips = "".join(
+            f'<span style="display:inline-block;font-size:10.5px;margin:2px 3px 0 0;'
+            f'color:{"#1a7f37" if st["ok"] else "#cf222e"}">'
+            f'{"✓" if st["ok"] else "✗"} {esc(st["state"])}</span>'
+            for st in ls["steps"])
+        return f'<div style="margin-top:4px;color:#57606a;font-size:10.5px">Alert Log: {chips}</div>'
+
     rows = ""
     _order = [DEFECT, BLOCKED, INCONCLUSIVE, KNOWN, PASS]
     _order += sorted({y["bucket"] for y in f} - set(_order))
@@ -1918,7 +1940,7 @@ def write_html(path, ctx):
 <td>{monitor_type_badge(x.get('monitor_type'))}<div style="margin-top:3px;font-size:12.5px;color:#1b1f23">{esc(x.get('monitor'))}</div></td>
 <td><strong>{esc(x['integration'])}</strong>{(f'<div style="font-size:10.5px;color:#57606a">via {esc(x["tool"])}</div>' if x.get('tool') else '')}</td>
 <td><span class="pill {bucket}">{bucket}</span><div style="font-size:10.5px;color:#57606a;margin-top:4px">{esc(meaning)}</div></td>
-<td>{lifecycle_steps_html(x)}</td>
+<td>{lifecycle_steps_html(x)}{_log_chips(x)}</td>
 <td style="font-size:12.5px">{esc(x['headline'])}</td>
 <td style="font-size:12px">{_alertlog_cell(x)}</td>
 <td style="font-size:12px">{_tool_cell(x)}</td></tr>"""
@@ -1943,6 +1965,14 @@ def write_html(path, ctx):
                 f'<th style="width:170px">{esc(t_lbl)}</th>'
                 f'<th>{esc(m_lbl)}</th><th style="width:200px">Result</th>'
                 f'</tr>{trs}</table>')
+
+    def _log_steps_block(x):
+        ls = x.get("log_steps")
+        if not ls:
+            return ""
+        return ('<p class="det" style="margin:12px 0 4px"><strong>Alert Log '
+                '&mdash; one row per state the monitor went through</strong></p>'
+                + _collab_table(ls))
 
     def _evidence_card(x):
         if x.get("collab"):
@@ -1978,7 +2008,7 @@ def write_html(path, ctx):
 <tr><th>Alert log rows</th><td class="mono">{esc(x['alert_log_rows'])} (failed deliveries: {esc(x['failed_rows'])})</td></tr>
 <tr><th>Verified in tool</th><td>{esc(x['tool'] or 'not checked')}</td></tr>
 <tr><th style="color:#6e7681;font-size:11px">Ticket ID source (DB)</th><td style="font-size:11px;color:#6e7681;font-family:monospace">{db_evidence_html(x.get('webmon_db_evidence', {}))}</td></tr>
-</table>{tool_tbl}{_collab_table(x["itsm_steps"]) if x.get("itsm_steps") else ""}</div>"""
+</table>{tool_tbl}{_log_steps_block(x)}{_collab_table(x["itsm_steps"]) if x.get("itsm_steps") else ""}</div>"""
 
     # Evidence grouped by verdict (worst first). Each group has an anchor
     # (#ev-DEFECT, #ev-BLOCKED, ...) that the Executive summary tiles link
