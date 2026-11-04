@@ -20,6 +20,7 @@ accounts/*/stage3_*.json
 accounts/*/stage4_*.json
 accounts/*/stage4_results.json
 accounts/*/ticket_verification.json
+accounts/*/add_integrations.json
 accounts/*/itsm_first_results.json
 accounts/*/s247_config.json
 accounts/*/account_inventory.json

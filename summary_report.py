@@ -622,6 +622,39 @@ summary{cursor:pointer;padding:10px 14px}details[open] summary{border-bottom:1px
 """
 
 
+def add_integrations(account):
+    """This run's 'add integration' results (integration_setup.py), or None
+    when the account does not re-add integrations (or it did not run)."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts",
+                     account or "", "add_integrations.json")
+    data = load(p) if os.path.isfile(p) else None
+    return (data or {}).get("results") or None
+
+
+def add_block(res):
+    if not res:
+        return ""
+    rows = ""
+    for r in res:
+        b = {"PASS": PASS, "BLOCKED": BLOCKED}.get(r["status"], DEFECT)
+        how = "; ".join(r.get("steps") or [])
+        if r.get("mismatches"):
+            how += "<br>" + "<br>".join(esc(m) for m in r["mismatches"])
+        rows += (f'<tr><th class="ig">{esc(r["name"])}<div class="route">{esc(r["app"])}</div></th>'
+                 f'<td><span class="v v-{b}">{ICON[b]} {WORD[b]}</span></td>'
+                 f'<td class="small">{esc(how) if not r.get("mismatches") else how}'
+                 + (f'<div class="ids">new id <code>{esc(r["new_service_id"])}</code></div>'
+                    if r.get("new_service_id") else "") + "</td></tr>")
+    n = sum(r["status"] == "PASS" for r in res)
+    return (f'<h2 id="add">Add integrations — {n}/{len(res)} added and verified</h2>'
+            f'<div class="card"><p class="small muted">Each integration was deleted and '
+            f'ADDED again (DOWN, TROUBLE, CRITICAL on · All Monitors · webhook URL (Slack, Discord) or '
+            f'integration key (PagerDuty) · credential profile or Zoho connection), then read back and every setting '
+            f'compared. All results below use these newly added integrations.</p>'
+            f'<div class="tw"><table class="mx"><thead><tr><th>Integration</th><th>Add</th>'
+            f'<th>What happened</th></tr></thead><tbody>{rows}</tbody></table></div></div>')
+
+
 def build(cons, evts, account, out_path):
     reps = [("consolidated", cons), ("events", evts)]
     recs = []
@@ -629,9 +662,13 @@ def build(cons, evts, account, out_path):
         recs += ((r or {}).get("env") or {}).get("integration_records") or []
     findings = [f for _, r in reps for f in (r or {}).get("findings") or []]
     counts = {b: sum(1 for f in findings if f["bucket"] == b) for b in ORDER}
-    health = (DEFECT if counts[DEFECT] else BLOCKED if counts[BLOCKED] or counts[INCONC]
+    adds = add_integrations(account)
+    add_fail = [r for r in adds or [] if r["status"] not in ("PASS", "BLOCKED")]
+    add_blk = [r for r in adds or [] if r["status"] == "BLOCKED"]
+    health = (DEFECT if counts[DEFECT] or add_fail
+              else BLOCKED if counts[BLOCKED] or counts[INCONC] or add_blk
               else PASS)
-    msg = {DEFECT: f"{counts[DEFECT]} problem(s) need a developer",
+    msg = {DEFECT: f"{counts[DEFECT] + len(add_fail)} problem(s) need a developer",
            BLOCKED: "Some checks could not run — not a product verdict",
            PASS: "Every integration worked for every state"}[health]
     grid = next(((r or {}).get("env") or {}).get("grid") for _, r in reps if r) or ""
@@ -665,6 +702,13 @@ def build(cons, evts, account, out_path):
     build_txt = cur["build"] or "not recorded (local run)"
 
     attn = ""
+    for r in add_fail + add_blk:
+        b = BLOCKED if r in add_blk else DEFECT
+        why = "; ".join(r.get("mismatches") or [s for s in r.get("steps") or []
+                                                if "FAIL" in s or "not touched" in s] or r.get("steps") or [])
+        attn += (f'<li><span class="v v-{b}">{ICON[b]} {WORD[b]}</span> '
+                 f'<span class="what">{esc(r["name"])}</span> <span class="muted">'
+                 f'({esc(r["app"])})</span> · Add integration<br><span>{esc(why)}</span></li>')
     for f in sorted((f for f in findings if f["bucket"] in (DEFECT, BLOCKED, INCONC)),
                     key=lambda f: ORDER.index(f["bucket"])):
         nm, app = integ_label(f["integration"], recs)
@@ -738,6 +782,8 @@ def build(cons, evts, account, out_path):
 <h2 id="changes">What changed since the last run</h2><div class="card">{diff_block}</div>
 
 <h2 id="attention">Needs attention</h2><div class="card">{attn}</div>
+
+{add_block(adds)}
 
 <h2>Trigger tests</h2><div class="tts">{trigger_tests(cons or evts)}</div>
 

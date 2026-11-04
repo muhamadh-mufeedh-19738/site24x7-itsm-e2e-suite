@@ -445,6 +445,10 @@ def main():
                     help="test this account's ITSM tool credentials "
                          "(ServiceNow / Desk / SDP / HALO). Reads no "
                          "tickets, changes nothing.")
+    ap.add_argument("--no-add-integrations", dest="add_integrations_off",
+                    action="store_true",
+                    help="full run WITHOUT deleting and re-adding the "
+                         "integrations (debugging only)")
     ap.add_argument("--no-integrations", action="store_true",
                     help="skip the automatic integration-list capture at the "
                          "start of a run")
@@ -693,6 +697,27 @@ def main():
     if args.login_only:
         log("\n  Cookie refreshed. Stopping (--login-only).")
         return
+
+    # ---- ADD INTEGRATIONS (mandatory in a full run) ----------------------
+    # Every covered integration is deleted and ADDED again (DOWN/TROUBLE/
+    # CRITICAL, All Monitors, hook URL / key, credential profile or Zoho
+    # connection), then read back and compared. The validation below then
+    # runs on these freshly added integrations. Result: add_integrations.json
+    # (shown in the report). A failed add never stops the run; it is
+    # reported. Accounts without integration_templates.json are skipped.
+    add_res = os.path.join(d, "add_integrations.json")
+    if os.path.isfile(add_res):
+        os.remove(add_res)          # never show an older run's result
+    if args.full and not args.add_integrations_off:
+        setup = os.path.join(HERE, "integration_setup.py")
+        if os.path.isfile(os.path.join(d, "integration_templates.json")):
+            section(f"ADD INTEGRATIONS — {name}")
+            rc = run([sys.executable, setup, "-a", name,
+                      "--grid", env["S247_GRID_NAME"]], env, HERE,
+                     "integration_setup.py")
+            if rc != 0:
+                log("\n  [WARN] not every integration was added and verified;"
+                    " the report shows which one and why.")
 
     # ---- live integration list, BEFORE the suite ------------------------
     # Alert Logs are history, so without a current list the report can show
