@@ -459,10 +459,12 @@ def main():
                          "this account, so deleted integrations stop "
                          "appearing in reports")
     ap.add_argument("--full", action="store_true",
-                    help="consolidated (keyword) cycle + event-based "
-                         "(response time) cycle + ONE summary report. The "
-                         "event monitor/profile come from accounts/<acct>/"
-                         "events.json")
+                    help="(default) consolidated + event-based cycles + ONE "
+                         "summary report; the event monitor/profile come from "
+                         "accounts/<acct>/events.json")
+    ap.add_argument("--consolidated-only", action="store_true",
+                    help="old behaviour: keyword cycle only, no event-based "
+                         "cycle and no summary report")
     ap.add_argument("--itoc360-jenkins-login", action="store_true",
                     help="sign in to iTOC360 once more, as a SEPARATE session "
                          "for Jenkins; saved to accounts/<acct>/"
@@ -479,6 +481,14 @@ def main():
     ap.add_argument("--no-login", action="store_true",
                     help="skip the cookie refresh (use the saved one)")
     args, passthrough = ap.parse_known_args()
+    # The full run is the DEFAULT. A consolidated-only run produced the old
+    # report for a production sanity on 4 Nov (Jenkins #80), so it now has to
+    # be asked for explicitly. An explicit event-only/report-only run through
+    # run_all options is left alone.
+    if not args.consolidated_only and not any(
+            a in passthrough for a in ("--events-monitor", "--report-only",
+                                       "--dry-run")):
+        args.full = True
 
     if args.local_setup:
         grids = load_grids()

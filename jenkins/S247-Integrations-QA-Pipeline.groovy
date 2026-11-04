@@ -340,7 +340,6 @@ pipeline {
         choice(name: 'ACCOUNT', choices: ['automation', 'tpt', 'tpt1'], description: 'Which Site24x7 account the E2E suite runs against (folder name under accounts/)')
         booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy the build in SD first. Untick to ONLY run the E2E suite on what is already on the grid (SD_BUILD_URL can then be left empty).')
         booleanParam(name: 'RUN_SUITE', defaultValue: true, description: 'Run the E2E suite after the deploy completes. Untick to only deploy.')
-        booleanParam(name: 'FULL_RUN', defaultValue: true, description: 'Consolidated alerts (keyword cycle) AND event-based alerts (response time: CRITICAL/TROUBLE routes) in one run, with ONE summary report. Needs accounts/<ACCOUNT>/events.json in the repo. Untick for the consolidated run only.')
         string(name: 'SD_BUILD_URL', defaultValue: '', description: 'Full build URL to deploy, e.g. https://build.zohocorp.com/zoho/webmonitor/webhost/<BRANCH>/<DATE>/AdventNetWebMon.zip')
         booleanParam(name: 'DEPLOY_PLUS', defaultValue: false, description: 'Want to check PLUS monitors as well (server / network / poller / cloud)? Tick to ALSO deploy a Plus server build to the Plus grid below.')
         choice(name: 'PLUS_GRID', choices: ['integrations-qa-plus'], description: 'Plus grid that receives the Plus server build (only used when DEPLOY_PLUS is ticked).')
@@ -376,7 +375,7 @@ pipeline {
         stage('1. Check inputs') {
             steps {
                 script {
-                    if (params.ACCOUNT == null || params.RUN_SUITE == null || params.DEPLOY_PLUS == null || params.FULL_RUN == null) {
+                    if (params.ACCOUNT == null || params.RUN_SUITE == null || params.DEPLOY_PLUS == null) {
                         error('The new boxes are not loaded yet (this happens once after updating the script). Click "Build with Parameters" again - you will now see them. Nothing was deployed.')
                     }
 
@@ -666,7 +665,11 @@ pipeline {
                                 echo "No S247_${A}_ITOC_STATE credential - iTOC360 (if this account has it) will show BLOCKED."
                             }
 
-                            String fullFlag = params.FULL_RUN ? '--full' : ''
+                            // ALWAYS the full run: consolidated + event-based alerts and ONE
+                            // summary report. There is deliberately no checkbox for it any more:
+                            // build #80 (4 Nov) was started with it unticked and produced the old
+                            // consolidated-only report for a production sanity.
+                            String fullFlag = '--full'
                             // Which build is on the grid, for "vs previous build" in the report
                             String buildLabel = ''
                             withEnv(["BL_DEPLOY=${params.DEPLOY}", "BL_URL=${params.SD_BUILD_URL ?: ''}"]) {
