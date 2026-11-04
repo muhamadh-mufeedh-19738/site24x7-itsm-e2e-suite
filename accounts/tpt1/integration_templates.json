@@ -1,0 +1,106 @@
+{
+  "_comment": "Settings the suite ADDS these integrations with on every run (integration_setup.py). No secrets here: hook URLs / keys live in .itsm.env (INTEG_SECRET_*).",
+  "captured_at": "2026-11-04T16:10:13+0530",
+  "integrations": [
+    {
+      "name": "ServiceDesk Plus Cloud",
+      "type_id": 4,
+      "app": "ServiceDesk Plus OnDemand",
+      "secret_field": null,
+      "secret_auto": false,
+      "template": {
+        "selection_type": 0,
+        "sendClearAlerts": 0,
+        "details": {
+          "portal_name": "muhamadhmufeedhtpt1 - Site24x7",
+          "down_alert": true,
+          "cmdb_integration": true,
+          "oauth2_provider_id": "47777000051391032",
+          "subject": "$MONITORNAME is $STATUS",
+          "module": 1,
+          "manual_resolve": false,
+          "problem_alert": false,
+          "manual": false,
+          "portal_api_name": "itdesk",
+          "trouble_alert": true,
+          "critical_alert": true,
+          "associate_ci_id": true,
+          "name": "ServiceDesk Plus Cloud",
+          "cmdb_selection_type": 0,
+          "action_on_availability": 0,
+          "portal_id": 85038439
+        },
+        "type": 4
+      }
+    },
+    {
+      "name": "Snow Sanity",
+      "type_id": 11,
+      "app": "ServiceNow",
+      "secret_field": null,
+      "secret_auto": false,
+      "template": {
+        "cmdb_integration": true,
+        "instance_url": "https://dev434120.service-now.com/",
+        "is_incident_api": 1,
+        "sender_name": "Site24x7",
+        "type": 11,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "action_on_deletion": 2,
+        "cmdb_service_id": "47777000051445003",
+        "cmdb_selection_type": 0,
+        "sendClearAlerts": 0,
+        "down_alert": true,
+        "credential_profile_id": "47777000051967884",
+        "problem_alert": false,
+        "enable_onboarding": false,
+        "selection_type": 0,
+        "is_assignment_group_enabled": false,
+        "credential_type": 1,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "associate_ci_id": true,
+        "name": "Snow Sanity",
+        "action_on_availability": 0
+      }
+    },
+    {
+      "name": "Slack Sanity",
+      "type_id": 5,
+      "app": "Slack",
+      "secret_field": "url",
+      "secret_auto": false,
+      "template": {
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 5,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "name": "Slack Sanity"
+      }
+    },
+    {
+      "name": "Discord Sanity",
+      "type_id": 26,
+      "app": "Discord",
+      "secret_field": "url",
+      "secret_auto": false,
+      "template": {
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 26,
+        "title": "$MONITORNAME is $STATUS",
+        "alert_tags_id": [],
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "send_incident_parameters": true,
+        "name": "Discord Sanity"
+      }
+    }
+  ]
+}

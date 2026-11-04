@@ -307,6 +307,11 @@ def applog_search(grid, from_dt, to_dt, query, page="1-100"):
     lo, hi = from_dt.timestamp() * 1000, to_dt.timestamp() * 1000
     rows = []
     for e in s3.extract_entries(payload):
+        # FIX (4 Nov, TPT): the Alert Log answered with plain strings in
+        # its list once, and e.get() crashed the whole pre-flight stage.
+        # A non-row entry is skipped, never fatal.
+        if not isinstance(e, dict):
+            continue
         try:
             ts = float(e.get("_zl_timestamp"))
         except (TypeError, ValueError):

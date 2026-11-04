@@ -12,10 +12,10 @@ WHY
   freshly added integrations (they keep the same names, so every later
   stage finds them as before).
 
-COVERED NOW (6):  Slack, Discord, PagerDuty, ServiceNow, Zoho Desk,
-                  ServiceDesk Plus OnDemand.
-ON HOLD:          TOPdesk, Mattermost, iTOC360 (new framework, not in the
-                  default build yet) — left exactly as they are.
+COVERED NOW:  Slack, Discord, PagerDuty, ServiceNow, Zoho Desk,
+              ServiceDesk Plus OnDemand.
+NOT TOUCHED:  every other integration (TOPdesk, Mattermost, iTOC360, HALO,
+              SDP MSP, Custom Webhook/AAG, iLert) is left exactly as it is.
 
 FILES (per account folder accounts/<account>/)
   integration_templates.json   settings to add with, NO secrets (committed).
@@ -44,6 +44,7 @@ SAFETY
 
 import argparse
 import getpass
+import glob
 import json
 import os
 import re
@@ -64,9 +65,22 @@ TYPES = {
     20: ("zdesk",       None,          "Zoho Desk"),
     26: ("discord",     "url",         "Discord"),
 }
+# Supported but NOT in scope now (left untouched): uncomment to cover them.
+#   8:  ("webhooks", "password", "Custom Webhook"),
+#   33: ("ilert",    "url",      "iLert"),
+# Secret fields Site24x7 DOES return (iLert's URL carries its API key):
+# captured automatically by --snapshot into .itsm.env, never into the
+# committed template, so nobody has to type them.
+AUTO_SECRET = {33}
+# Per type, fields that are NOT secret there even though they are in
+# SECRET_FIELDS (a webhook's URL and basic-auth user name).
+KEEP_FIELDS = {8: {"url", "username"}}
 # Fields the server owns or that are never returned — not part of the
 # template and not compared on read-back.
-SERVER_FIELDS = {"service_id", "service_status", "is_edit_allowed"}
+SERVER_FIELDS = {"service_id", "service_status", "is_edit_allowed",
+                 # SDP OD: the CMDB link Site24x7 creates for EACH new
+                 # integration (new id every add — not a setting)
+                 "cmdb_service_id"}
 SECRET_FIELDS = {"url", "service_key", "token", "password", "api_key",
                  "username"}
 ALERT_FLAGS = ("down_alert", "trouble_alert", "critical_alert")
@@ -170,13 +184,15 @@ class Api:
 def make_template(type_id, data):
     """GET response -> what we POST to add it again. No secrets, no ids;
     DOWN/TROUBLE/CRITICAL on and All Monitors forced (the suite's rule)."""
+    keep = KEEP_FIELDS.get(type_id, set())
     t = {k: v for k, v in data.items()
-         if k not in SERVER_FIELDS and k not in SECRET_FIELDS}
+         if k not in SERVER_FIELDS and (k not in SECRET_FIELDS or k in keep)}
     t["type"] = type_id
     t["selection_type"] = 0
     t.pop("monitors", None)
     if type_id == 4:                       # SDP OD keeps its settings in details
-        det = dict(t.get("details") or {})
+        det = {k: v for k, v in (t.get("details") or {}).items()
+               if k not in SERVER_FIELDS}
         for f in ALERT_FLAGS:
             det[f] = True
         t["details"] = det
@@ -231,6 +247,7 @@ def do_snapshot(api, d):
                         "hook URLs / keys live in .itsm.env (INTEG_SECRET_*)."),
            "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
            "integrations": []}
+    auto = {}
     for it in api.list():
         tid = int(it.get("type") or 0)
         if tid not in TYPES:
@@ -240,9 +257,15 @@ def do_snapshot(api, d):
             log(f"  [FAIL] {it['name']}: could not read settings (HTTP {c} {msg})")
             continue
         tpl = make_template(tid, data)
+        sf = TYPES[tid][1]
+        if tid == 8 and data.get("auth_method") != "B":
+            sf = None                  # no basic auth -> no password needed
+        if tid in AUTO_SECRET and data.get(sf):
+            auto[secret_key(it["name"])] = data[sf]
         out["integrations"].append({"name": it["name"], "type_id": tid,
                                     "app": TYPES[tid][2],
-                                    "secret_field": TYPES[tid][1],
+                                    "secret_field": sf,
+                                    "secret_auto": tid in AUTO_SECRET,
                                     "template": tpl})
         filled = sorted(k for k, v in tpl.items() if v not in ("", None, []))
         log(f"  [OK] {it['name']:<28} {TYPES[tid][2]:<26} fields: {', '.join(filled)}")
@@ -250,6 +273,10 @@ def do_snapshot(api, d):
     with open(path, "w") as fh:
         json.dump(out, fh, indent=2)
     log(f"\n  saved {len(out['integrations'])} template(s): {path}")
+    if auto:
+        save_secrets(d, auto)
+        log(f"  captured {len(auto)} secret(s) Site24x7 returns (e.g. iLert URL) "
+            f"into .itsm.env — nothing to type for them")
 
 
 def do_secrets(d, templates):
@@ -258,19 +285,49 @@ def do_secrets(d, templates):
     is loaded into every run. Only INTEG_SECRET_* lines are touched."""
     path = os.path.join(d, ".itsm.env")
     cur = read_env_file(path)
-    need = [t for t in templates if t.get("secret_field")]
-    log("Enter the webhook URL (Slack, Discord) or the integration key (PagerDuty). Input is hidden.")
+    need = [t for t in templates if t.get("secret_field") and not t.get("secret_auto")]
+    log("Enter each value once. Input is hidden:")
+    log("  Slack / Discord: webhook URL · PagerDuty: integration key ·")
+    log("  Custom Webhook: its basic-auth password")
     log("Press Enter to keep the value already saved.\n")
+    # The same integration name in another account (e.g. "Slack Sanity") is
+    # often the same webhook: offer that saved value, the person decides.
+    others = {}
+    for od in sorted(glob.glob(os.path.join(HERE, "accounts", "*", ".itsm.env"))):
+        acct = os.path.basename(os.path.dirname(od))
+        if os.path.abspath(os.path.dirname(od)) != os.path.abspath(d):
+            for k, v in read_env_file(od).items():
+                if k.startswith("INTEG_SECRET_") and v:
+                    others.setdefault(k, (acct, v))
     new = {}
     for t in need:
         k = secret_key(t["name"])
         have = " (saved — Enter keeps it)" if cur.get(k) else ""
-        what = "integration key" if t["secret_field"] == "service_key" else "webhook URL"
+        if not cur.get(k) and k in others:
+            have = f" (Enter = use the SAME value as account '{others[k][0]}')"
+        what = {"service_key": "integration key",
+                "password": "basic-auth password"}.get(t["secret_field"], "webhook URL")
         v = getpass.getpass(f"  {t['app']} '{t['name']}' {what}{have}: ").strip()
+        if not v and not cur.get(k) and k in others:
+            v = others[k][1]
+            log(f"     using the value saved for '{others[k][0]}'")
         if v:
-            if "'" in v or "\n" in v:
-                sys.exit("[BLOCKER] value contains a quote or newline — not saved")
             new[k] = v
+    save_secrets(d, new)
+    cur.update(new)
+    missing = [t["name"] for t in need if not cur.get(secret_key(t["name"]))]
+    log(f"\n  saved in {path}  ({len(need) - len(missing)}/{len(need)} set)")
+    if missing:
+        log("  still missing: " + ", ".join(missing))
+    log("  Jenkins: run  python3 jenkins_secrets.py  to upload the change.")
+
+
+def save_secrets(d, new):
+    """Write INTEG_SECRET_* lines into .itsm.env, keeping every other line."""
+    path = os.path.join(d, ".itsm.env")
+    for v in new.values():
+        if "'" in v or "\n" in v:
+            sys.exit("[BLOCKER] a value contains a quote or newline — not saved")
     lines = []
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
@@ -288,12 +345,6 @@ def do_secrets(d, templates):
         fh.writelines(lines)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
-    cur.update(new)
-    missing = [t["name"] for t in need if not cur.get(secret_key(t["name"]))]
-    log(f"\n  saved in {path}  ({len(need) - len(missing)}/{len(need)} set)")
-    if missing:
-        log("  still missing: " + ", ".join(missing))
-    log("  Jenkins: run  python3 jenkins_secrets.py  to upload the change.")
 
 
 def do_recreate(api, d, templates, check_only, only):
@@ -316,8 +367,8 @@ def do_recreate(api, d, templates, check_only, only):
             sv = secrets.get(secret_key(name))
             if not sv:
                 r["status"] = "BLOCKED"
-                what = ("PagerDuty integration key" if sf == "service_key"
-                        else "webhook URL")
+                what = {"service_key": "PagerDuty integration key",
+                        "password": "webhook basic-auth password"}.get(sf, "webhook URL")
                 r["steps"].append(f"not touched: its {what} is not saved "
                                   f"(run: python3 integration_setup.py -a <account> --secrets)")
                 log(f"     [BLOCKED] {what} not saved — integration left as it is")
