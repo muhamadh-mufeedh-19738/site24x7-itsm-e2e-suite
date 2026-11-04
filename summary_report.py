@@ -98,6 +98,29 @@ def missed(f):
     return [s["state"] for s in steps_of(f) if not s.get("ok")]
 
 
+def repeats(f):
+    """States Site24x7 sent MORE than once to this integration in one route
+    (e.g. DOWN twice, seconds apart). Each state should reach a tool once;
+    an extra copy means a duplicate message, and for a ticketing tool a
+    possible second ticket. Shown as a 'Check' -- the verdict is unchanged.
+    Returns [(state, [times...]), ...]."""
+    src = f.get("collab") or f.get("itsm_steps") or f.get("log_steps") or {}
+    first = {s["state"]: s.get("sent_at") for s in src.get("steps") or []
+             if s.get("sent_at")}
+    out = {}
+    for x in src.get("extra_rows") or []:
+        st = x.get("status")
+        if st in first:
+            out.setdefault(st, [first[st]]).append(x.get("sent_at"))
+    return list(out.items())
+
+
+def repeat_text(f):
+    return "; ".join(f"{st} sent {len(ts)} times ("
+                     + ", ".join(str(t or "?")[-8:] for t in ts) + ")"
+                     for st, ts in repeats(f))
+
+
 def short_reason(f):
     bad = [s for s in steps_of(f) if not s.get("ok")]
     if bad:
@@ -142,6 +165,8 @@ def cell(f):
     elif b == PASS and missed(f):
         note = (f'<div class="chk">Check: {esc(", ".join(missed(f)))} alert not '
                 f'logged for this integration</div>')
+    if repeats(f):
+        note += f'<div class="chk">Check: {esc(repeat_text(f))}</div>'
     return (f'<td><div class="v v-{b}">{ICON[b]} {WORD[b]}</div>'
             f'<div class="chips">{chips(f)}</div>'
             f'<div class="ids">{idh}</div>{note}</td>')
@@ -474,8 +499,25 @@ def diff_html(cur, runs):
                            f'{esc(" → ".join(WORD[b] for b in seq))}</span></li>' for k, seq in fl_rows)
                  + '</ul><div class="muted small">Re-run before raising a bug for these.</div></div>')
     extra = [f'{label(k)}: {esc("; ".join(fl))}' for k, _, _, fl in d["states"]]
+    # A changed event ROUTE (e.g. CRITICAL → TROUBLE → UP became
+    # DOWN → TROUBLE → CRITICAL → UP, 4 Nov) makes every integration on it
+    # "not in this run" + "new in this run". One line per route, not per
+    # integration.
+    groups, rest = {}, []
+    for k, c, b in d["other"]:
+        if c in ("new in this run", "not in this run") and k.startswith("Event-based · ["):
+            groups.setdefault((c, k[k.index("[") + 1:k.index("]")]), []).append(k)
+        else:
+            rest.append((k, c, b))
+    for (c, route), keys in sorted(groups.items(), key=lambda g: g[0][0] != "not in this run"):
+        if len(keys) == 1:
+            rest.append((keys[0], c, None))
+            continue
+        word = "removed" if c == "not in this run" else "added"
+        extra.append(f'<b>Event-based route {esc(route)}</b>: {word} — {len(keys)} '
+                     f'integration results ({"the route changed; compared again from the next run" if word == "added" else "no longer run"})')
     extra += [f'{label(k) if k in cur["results"] or k in prev["results"] else esc(k)}: {esc(c)}'
-              for k, c, _ in d["other"]]
+              for k, c, _ in rest]
     body += ('<div class="dgrp"><div class="dt">Other changes</div>'
              + (f'<ul class="dl">{"".join(f"<li>{x}</li>" for x in extra)}</ul>' if extra
                 else '<div class="muted small">none</div>')
@@ -640,6 +682,15 @@ def build(cons, evts, account, out_path):
                      + (f' <span class="muted">({esc(app)})</span>' if app else "")
                      + f' · {esc(f.get("monitor"))}<br><span>Ticket lifecycle passed, '
                      f'but no {esc(", ".join(missed(f)))} alert was logged for it</span>'
+                     + "".join(f'<code>{esc(t)}</code>' for t in ticket_ids(f)) + "</li>")
+    for f in findings:
+        if repeats(f) and f["bucket"] != BLOCKED:
+            nm, app = integ_label(f["integration"], recs)
+            attn += (f'<li><span class="v v-CHECK">? Check</span> '
+                     f'<span class="what">{esc(nm)}</span>'
+                     + (f' <span class="muted">({esc(app)})</span>' if app else "")
+                     + f' · {esc(f.get("monitor"))}<br><span>Same alert sent more '
+                     f'than once: {esc(repeat_text(f))}</span>'
                      + "".join(f'<code>{esc(t)}</code>' for t in ticket_ids(f)) + "</li>")
     attn = (f'<ul class="attn">{attn}</ul>' if attn else
             '<p class="ok"><b>Nothing — every integration passed.</b></p>')

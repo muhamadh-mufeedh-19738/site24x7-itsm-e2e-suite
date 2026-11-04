@@ -40,6 +40,7 @@ SAFETY
 import argparse
 from datetime import datetime, timedelta, timezone
 import base64
+import glob
 import json
 import os
 import re
@@ -63,6 +64,45 @@ def section(t):
     log("\n" + "=" * 70)
     log(t)
     log("=" * 70)
+
+
+# ---------------------------------------------------------------------------
+# Several suite accounts share ONE ticketing instance (automation, TPT and
+# TPT1 all post to the same ServiceNow) and use the SAME monitor names
+# ("E2E Events Monitor 2"). A search by monitor name + time window then also
+# finds the OTHER account's ticket when runs overlap (4 Nov 2026: automation
+# reported INC0011644, which was TPT1's). Drop a found ticket when its text
+# names another account's suite monitor id and not ours. Tickets that carry
+# no monitor id at all are kept, so nothing real is ever hidden.
+def _suite_monitor_ids():
+    ids = set()
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts")
+    for path in glob.glob(os.path.join(root, "*", "events.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                ev = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        for m in ev.get("monitors") or [ev]:
+            if m.get("monitor_id"):
+                ids.add(str(m["monitor_id"]))
+    return ids
+
+
+def drop_foreign(tickets, monitor_id):
+    """Returns (kept, dropped) -- dropped = tickets that belong to another
+    suite account's monitor."""
+    if not monitor_id:
+        return list(tickets), []
+    others = _suite_monitor_ids() - {str(monitor_id)}
+    kept, dropped = [], []
+    for t in tickets:
+        text = json.dumps(t, default=str)
+        if str(monitor_id) not in text and any(o in text for o in others):
+            dropped.append(t)
+        else:
+            kept.append(t)
+    return kept, dropped
 
 
 def env(name, default=""):
@@ -1478,6 +1518,10 @@ def cmd_verify(args):
                             "blocked": True,
                             "blocker_detail": str(exc)})
                 continue
+            found, foreign = drop_foreign(found, stage3.get("monitor_id"))
+            for t in foreign:
+                log(f"    [skip] {t.get('ticket_id')} belongs to another suite "
+                    f"account's monitor (same name, same tool) -- not ours")
             log(f"    searched {tool.name} for '{args.monitor_text}' "
                 f"{since_utc:%H:%M:%S}-{until_utc:%H:%M:%S} UTC -> "
                 f"{len(found)} ticket(s)")

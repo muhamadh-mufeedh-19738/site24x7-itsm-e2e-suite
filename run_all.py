@@ -2510,7 +2510,7 @@ def main():
     ap.add_argument("--events-profile", default=None,
                     help="EVENT-BASED mode: dedicated threshold profile used "
                          "only for the test (never the monitor's own)")
-    ap.add_argument("--events-routes", default="critical,trouble;trouble,critical",
+    ap.add_argument("--events-routes", default="down,trouble,critical;down,critical,trouble",
                     help="EVENT-BASED mode: routes, run one after the other")
     ap.add_argument("--out-dir", default=REPORT_DIR)
     args = ap.parse_args()

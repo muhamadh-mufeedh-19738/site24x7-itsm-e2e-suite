@@ -756,7 +756,7 @@ def main():
             mons = ev["monitors"]
             for m in mons:
                 log(f"  monitor {m.get('monitor_name') or m['monitor_id']} · "
-                    f"route {m.get('route') or 'critical,trouble then trouble,critical'}")
+                    f"route {m.get('route') or 'down,trouble,critical then down,critical,trouble'}")
             log(f"  log: {ev_log}")
             if all(m.get("route") for m in mons):
                 cyc = [a for m in mons for a in

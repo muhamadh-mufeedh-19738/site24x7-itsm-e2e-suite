@@ -6,14 +6,14 @@
       "monitor_name": "E2E Events Monitor",
       "profile_id": "47777000052000355",
       "profile_name": "E2E Events - Response Time",
-      "route": "critical,trouble"
+      "route": "down,trouble,critical"
     },
     {
       "monitor_id": "47777000052037420",
       "monitor_name": "E2E Events Monitor 2",
       "profile_id": "47777000052037418",
       "profile_name": "E2E Events - Response Time 2",
-      "route": "trouble,critical"
+      "route": "down,critical,trouble"
     }
   ]
 }

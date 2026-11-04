@@ -12,13 +12,18 @@ WHY
   including CRITICAL, which keywords cannot produce.
 
 HOW (one monitor, routes run one after the other)
-  Response time (attribute 3, primary location) carries two rules in the
+  Response time (attribute 3, primary location) carries three rules in the
   threshold profile, read and written with API version 2.1:
-      [{"severity": 2, "value": <trouble ms>}, {"severity": 3, "value": <critical ms>}]
-  Real response time is ~300-1500 ms, so:
-      CRITICAL  trouble 1 ms,     critical 2 ms      (critical outranks trouble)
-      TROUBLE   trouble 1 ms,     critical 60000 ms
-      UP        trouble 30000 ms, critical 60000 ms
+      [{"severity": 2, "value": <trouble ms>}, {"severity": 3, "value": <critical ms>},
+       {"severity": 0, "value": <down ms>}]
+  Severity 0 = DOWN: a DOWN-severity attribute also makes the monitor DOWN
+  (NewAlertNotifier.triggerThirdpartyForEvents: "Only a DOWN(0) attribute
+  propagates to availability"), and the product must NOT send a second,
+  availability DOWN alert for it. Real response time is ~300-1500 ms, so:
+      DOWN      trouble 1 ms,     critical 2 ms,     down 3 ms
+      CRITICAL  trouble 1 ms,     critical 2 ms,     down 60000 ms
+      TROUBLE   trouble 1 ms,     critical 60000 ms, down 60000 ms
+      UP        trouble 30000 ms, critical 60000 ms, down 60000 ms
   The monitor is moved onto a DEDICATED threshold profile for the test, so
   the profile it normally shares with other monitors is never edited. The
   original profile is put back at the end, even when a step fails.
@@ -26,7 +31,7 @@ HOW (one monitor, routes run one after the other)
 USAGE
   python3 stage2c_events.py --monitor-id 73970000003442142 \
       --profile-id 73970000004080144 \
-      --routes "critical,trouble;trouble,critical"
+      --routes "down,trouble,critical;down,critical,trouble"
 
 OUTPUT  stage2c_result.json — run_all.py --events reads it. Each route is
   its own entry in "monitors" (key, route, since, until), so every route is
@@ -43,9 +48,11 @@ from datetime import datetime, timedelta
 import stage2b_cycle as s2
 
 RESULT = "stage2c_result.json"
-STATE_CODE = {"critical": 3, "trouble": 2, "up": 1}
-# (trouble ms, critical ms) for each target state
-THRESHOLDS = {"critical": (1, 2), "trouble": (1, 60000), "up": (30000, 60000)}
+STATE_CODE = {"down": 0, "critical": 3, "trouble": 2, "up": 1}
+# (trouble ms, critical ms, down ms) for each target state
+THRESHOLDS = {"down": (1, 2, 3), "critical": (1, 2, 60000),
+              "trouble": (1, 60000, 60000), "up": (30000, 60000, 60000)}
+ROUTE_STATES = ("down", "critical", "trouble")
 SETTLE_AFTER_UP = 90        # recovery rows land within ~30s (3 Nov runs);
                             # the in-tool checks retry if a tool lags
 STATE_WAIT = 420            # max seconds to reach a state
@@ -85,11 +92,12 @@ def rule(sev, value):
 
 
 def set_thresholds(grid, tok, pid, profile, state):
-    trouble, critical = THRESHOLDS[state]
+    trouble, critical, down = THRESHOLDS[state]
     body = json.loads(json.dumps(profile))
     body.pop("profile_id", None)
     body["response_time_threshold"] = {"primary": [rule(2, trouble),
-                                                   rule(3, critical)]}
+                                                   rule(3, critical),
+                                                   rule(0, down)]}
     code, resp = s2.api(grid, f"/api/threshold_profiles/{pid}", tok,
                         method="PUT", body=body)
     ok = code in (200, 201)
@@ -98,8 +106,9 @@ def set_thresholds(grid, tok, pid, profile, state):
         got = sorted((r.get("severity"), r.get("value")) for r in
                      (((back or {}).get("data") or {})
                       .get("response_time_threshold") or {}).get("primary") or [])
-        ok = got == [(2, trouble), (3, critical)]
-    return ok, f"trouble {trouble} ms, critical {critical} ms (HTTP {code})"
+        ok = got == [(0, down), (2, trouble), (3, critical)]
+    return ok, (f"trouble {trouble} ms, critical {critical} ms, down {down} ms "
+                f"(HTTP {code})")
 
 
 def set_monitor_profile(grid, tok, mid, monitor, pid):
@@ -133,9 +142,9 @@ def drive(grid, tok, mid, name, pid, profile, state, route_key):
 
 def parse_route(text):
     route = [x.strip().lower() for x in text.split(",") if x.strip()]
-    bad = [x for x in route if x not in ("critical", "trouble")]
+    bad = [x for x in route if x not in ROUTE_STATES]
     if not route or bad:
-        s2.die(f"route states must be critical/trouble, got {text!r}")
+        s2.die(f"route states must be down/critical/trouble, got {text!r}")
     return route
 
 
@@ -257,7 +266,7 @@ def main():
                          "it once per monitor; the monitors run IN PARALLEL.")
     ap.add_argument("--monitor-id", help="(single monitor) monitor id")
     ap.add_argument("--profile-id", help="(single monitor) test threshold profile")
-    ap.add_argument("--routes", default="critical,trouble;trouble,critical",
+    ap.add_argument("--routes", default="down,trouble,critical;down,critical,trouble",
                     help="(single monitor) routes, run one after the other")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
