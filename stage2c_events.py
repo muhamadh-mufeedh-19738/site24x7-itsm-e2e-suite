@@ -36,6 +36,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -53,6 +54,9 @@ result = {"started_at": datetime.now().isoformat(timespec="seconds"),
           "mode": "events", "steps": [], "transitions": [], "monitors": []}
 
 
+LOCK = threading.RLock()          # workers share `result` and the result file
+
+
 def log(m=""):
     print(m, flush=True)
 
@@ -62,13 +66,15 @@ def now_local():
 
 
 def save():
-    with open(RESULT, "w", encoding="utf-8") as fh:
-        json.dump(result, fh, indent=2)
+    with LOCK:
+        with open(RESULT, "w", encoding="utf-8") as fh:
+            json.dump(result, fh, indent=2)
 
 
 def step(name, ok, detail=""):
-    result["steps"].append({"step": name, "ok": bool(ok), "detail": detail,
-                            "at": now_local()})
+    with LOCK:
+        result["steps"].append({"step": name, "ok": bool(ok), "detail": detail,
+                                "at": now_local()})
     log(f"  [{' OK ' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
     save()
 
@@ -115,133 +121,210 @@ def drive(grid, tok, mid, name, pid, profile, state, route_key):
     s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
     reached, last, waited = s2.wait_for(grid, tok, mid, STATE_CODE[state],
                                         STATE_WAIT, poll_every=10)
-    result["transitions"].append({
-        "monitor_id": mid, "monitor": name, "key": route_key, "state": state,
-        "observed_status": last, "at": now_local(), "waited_seconds": waited,
-        "reached": reached})
+    with LOCK:
+        result["transitions"].append({
+            "monitor_id": mid, "monitor": name, "key": route_key, "state": state,
+            "observed_status": last, "at": now_local(), "waited_seconds": waited,
+            "reached": reached})
     step(f"{name}: monitor is {state.upper()}", reached,
          f"status {last} after {waited}s")
     return reached
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--monitor-id", required=True)
-    ap.add_argument("--profile-id", required=True,
-                    help="dedicated threshold profile used only for this test")
-    ap.add_argument("--routes", default="critical,trouble;trouble,critical")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
+def parse_route(text):
+    route = [x.strip().lower() for x in text.split(",") if x.strip()]
+    bad = [x for x in route if x not in ("critical", "trouble")]
+    if not route or bad:
+        s2.die(f"route states must be critical/trouble, got {text!r}")
+    return route
 
-    routes = [[s.strip().lower() for s in r.split(",") if s.strip()]
-              for r in a.routes.split(";") if r.strip()]
-    for r in routes:
-        bad = [s for s in r if s not in ("critical", "trouble")]
-        if bad:
-            s2.die(f"route states must be critical/trouble, got {bad}")
 
-    grid = os.environ.get("S247_GRID_URL", "").rstrip("/")
-    tok = s2.get_token()
-    if not grid or not tok:
-        s2.die("S247_GRID_URL / token missing")
-    mid, pid = str(a.monitor_id), str(a.profile_id)
-
-    log("=" * 70)
-    log("STAGE 2C — EVENT-BASED ALERT CYCLE (response time)")
-    log("=" * 70)
+def prepare(grid, tok, mid, pid, test_pids):
+    """Read the monitor and its test profile, decide its TRUE own profile
+    and save a backup. Returns a dict, or dies with the reason."""
     code, m = s2.api(grid, f"/api/monitors/{mid}", tok)
     monitor = (m or {}).get("data")
     if not monitor:
         s2.die(f"could not read monitor {mid} (HTTP {code})")
     name = monitor.get("display_name") or mid
     original_pid = str(monitor.get("threshold_profile_id"))
-    code, p = s2.api(grid, f"/api/threshold_profiles/{pid}", tok)
-    profile = (p or {}).get("data")
+    backup = f"events_backup_{mid}.json"
+    if original_pid in test_pids:
+        # Still on a TEST profile (an interrupted run, or a copy made while
+        # another run was in progress): its real profile is in the backup.
+        try:
+            with open(backup, encoding="utf-8") as fh:
+                saved = json.load(fh)["monitor"]
+            real = str(saved.get("threshold_profile_id"))
+        except (OSError, ValueError, KeyError):
+            real = ""
+        if not real or real in test_pids:
+            s2.die(f"{name}: its own threshold profile ({original_pid}) is one "
+                   f"of the TEST profiles and no backup says what it should be. "
+                   f"Put the monitor back on its normal profile in Site24x7 and "
+                   f"re-run. Nothing was changed.")
+        log(f"  [note] {name} was still on test profile {original_pid}; its "
+            f"real profile {real} comes from {backup}")
+        monitor = dict(monitor, threshold_profile_id=real)
+        original_pid = real
+    code, pr = s2.api(grid, f"/api/threshold_profiles/{pid}", tok)
+    profile = (pr or {}).get("data")
     if not profile:
         s2.die(f"could not read threshold profile {pid} (HTTP {code})")
-    if pid == original_pid:
-        s2.die("the test profile must not be the monitor's own profile — it "
-               "may be shared with other monitors")
-
-    backup = f"events_backup_{mid}.json"
     with open(backup, "w", encoding="utf-8") as fh:
         json.dump({"monitor": monitor, "test_profile": profile}, fh, indent=2)
-    result.update({"monitor": {"monitor_id": mid, "name": name, "type": "URL"},
-                   "original_threshold_profile_id": original_pid,
-                   "test_threshold_profile_id": pid, "backup": backup})
-    step("original config saved", True, f"{backup} (threshold profile {original_pid})")
+    step(f"{name}: original config saved", True,
+         f"{backup} (threshold profile {original_pid})")
+    return {"mid": mid, "pid": pid, "name": name, "monitor": monitor,
+            "profile": profile, "original_pid": original_pid, "backup": backup}
+
+
+def worker(grid, tok, w, routes, outcome):
+    """One monitor: switch to its test profile, run its route(s) one after
+    the other, ALWAYS restore. Several workers run in parallel."""
+    mid, pid, name = w["mid"], w["pid"], w["name"]
+    monitor, profile = w["monitor"], w["profile"]
+    verdict, restored, verified = "PASS", False, False
+    try:
+        ok, detail = set_thresholds(grid, tok, pid, profile, "up")
+        step(f"{name}: test profile set to the UP baseline", ok, detail)
+        ok = ok and set_monitor_profile(grid, tok, mid, monitor, pid)
+        step(f"{name}: switched to the test threshold profile", ok, pid)
+        if not ok:
+            raise RuntimeError("could not switch the monitor's threshold profile")
+        s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
+        up, last, waited = s2.wait_for(grid, tok, mid, 1, STATE_WAIT, poll_every=10)
+        step(f"{name}: UP before its route", up, f"status {last} after {waited}s")
+        if not up:
+            raise RuntimeError(f"monitor not UP before the cycle (status {last})")
+        prev_until = None
+        for n, (rnum, route) in enumerate(routes):
+            key = f"{mid}:route{rnum}"
+            label = " → ".join(x.upper() for x in route + ["up"])
+            log(f"\n  {name} — ROUTE {rnum}: {label}")
+            since = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+            # never overlap this monitor's previous route window
+            if prev_until:
+                since = max(since, (datetime.strptime(prev_until, "%Y-%m-%d %H:%M:%S")
+                                    + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))
+            reached_all = True
+            for state in route + ["up"]:
+                if not drive(grid, tok, mid, name, pid, profile, state, key):
+                    reached_all = False
+                    break
+            log(f"  {name}: settling {SETTLE_AFTER_UP}s so the recovery alerts reach every tool")
+            time.sleep(SETTLE_AFTER_UP)
+            prev_until = now_local()
+            with LOCK:
+                result["monitors"].append({
+                    "monitor_id": mid, "key": key,
+                    "name": f"{name} [{label}]", "search_name": name,
+                    "type": "URL", "route": route, "since": since,
+                    "until": prev_until, "complete": reached_all})
+                save()
+            if not reached_all:
+                verdict = "FAIL"
+                drive(grid, tok, mid, name, pid, profile, "up", key)
+    except Exception as exc:  # noqa: BLE001
+        verdict = "FAIL"
+        with LOCK:
+            result.setdefault("errors", []).append(f"{name}: {exc}")
+        step(f"{name}: cycle stopped", False, str(exc))
+    finally:
+        okp = set_monitor_profile(grid, tok, mid, monitor, w["original_pid"])
+        okt, _ = set_thresholds(grid, tok, pid, profile, "up")
+        restored = bool(okp and okt)
+        step(f"{name}: original threshold profile restored", okp, w["original_pid"])
+        step(f"{name}: test profile left at the UP baseline", okt)
+        s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
+        up, last, waited = s2.wait_for(grid, tok, mid, 1, STATE_WAIT, poll_every=10)
+        verified = bool(okp and up)
+        step(f"{name}: UP after restore", up, f"status {last}")
+        if not restored:
+            verdict = "FAIL_UNSAFE"
+        outcome[mid] = {"name": name, "verdict": verdict, "restored": restored,
+                        "restore_verified": verified,
+                        "original_threshold_profile_id": w["original_pid"],
+                        "test_threshold_profile_id": pid, "backup": w["backup"]}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pair", action="append", default=[],
+                    metavar="MONITOR_ID:PROFILE_ID:ROUTE",
+                    help="one monitor, its dedicated test threshold profile and "
+                         "its route, e.g. 739...:739...:critical,trouble. Give "
+                         "it once per monitor; the monitors run IN PARALLEL.")
+    ap.add_argument("--monitor-id", help="(single monitor) monitor id")
+    ap.add_argument("--profile-id", help="(single monitor) test threshold profile")
+    ap.add_argument("--routes", default="critical,trouble;trouble,critical",
+                    help="(single monitor) routes, run one after the other")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+
+    # plan: [(monitor_id, profile_id, [(route_no, route), ...]), ...]
+    plan = []
+    if a.pair:
+        for n, spec in enumerate(a.pair, 1):
+            parts = spec.split(":", 2)
+            if len(parts) != 3:
+                s2.die(f"--pair must be MONITOR_ID:PROFILE_ID:ROUTE, got {spec!r}")
+            plan.append((parts[0].strip(), parts[1].strip(),
+                         [(n, parse_route(parts[2]))]))
+    elif a.monitor_id and a.profile_id:
+        routes = [parse_route(r) for r in a.routes.split(";") if r.strip()]
+        plan.append((str(a.monitor_id), str(a.profile_id),
+                     list(enumerate(routes, 1))))
+    else:
+        s2.die("give --pair (one per monitor) or --monitor-id + --profile-id")
+    mids = [x[0] for x in plan]
+    test_pids = {x[1] for x in plan}
+    if len(set(mids)) != len(mids) or len(test_pids) != len(plan):
+        s2.die("each monitor needs its OWN test profile: two monitors on one "
+               "profile would move each other")
+
+    grid = os.environ.get("S247_GRID_URL", "").rstrip("/")
+    tok = s2.get_token()
+    if not grid or not tok:
+        s2.die("S247_GRID_URL / token missing")
+
+    log("=" * 70)
+    log("STAGE 2C — EVENT-BASED ALERT CYCLE (response time)"
+        + (f" — {len(plan)} monitors in parallel" if len(plan) > 1 else ""))
+    log("=" * 70)
+    workers = [prepare(grid, tok, mid, pid, test_pids) for mid, pid, _ in plan]
+    first = workers[0]
+    result.update({"monitor": {"monitor_id": first["mid"], "name": first["name"], "type": "URL"},
+                   "original_threshold_profile_id": first["original_pid"],
+                   "test_threshold_profile_id": first["pid"], "backup": first["backup"]})
     if a.dry_run:
         log("  DRY RUN — nothing changed.")
         result["verdict"] = "DRY_RUN"
         save()
         return 0
 
-    verdict = "PASS"
-    try:
-        ok, detail = set_thresholds(grid, tok, pid, profile, "up")
-        step("test profile set to the UP baseline", ok, detail)
-        ok = ok and set_monitor_profile(grid, tok, mid, monitor, pid)
-        step(f"{name}: switched to the test threshold profile", ok, pid)
-        if not ok:
-            raise RuntimeError("could not switch the monitor's threshold profile")
-        s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
-        up, last, waited = s2.wait_for(grid, tok, mid, 1, STATE_WAIT, poll_every=15)
-        step(f"{name}: UP before the first route", up, f"status {last} after {waited}s")
-        if not up:
-            raise RuntimeError(f"monitor not UP before the cycle (status {last})")
+    outcome = {}
+    result["cycle_started_at"] = now_local()
+    threads = [threading.Thread(target=worker, args=(grid, tok, w, routes, outcome),
+                                name=w["name"])
+               for w, (_, _, routes) in zip(workers, plan)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    result["cycle_ended_at"] = now_local()
 
-        result["cycle_started_at"] = now_local()
-        for n, route in enumerate(routes, 1):
-            key = f"{mid}:route{n}"
-            label = " → ".join(s.upper() for s in route + ["up"])
-            log(f"\n  ROUTE {n}: {label}")
-            since = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
-            # never overlap the previous route's window: its late recovery
-            # rows would be counted for this route
-            if result["monitors"]:
-                prev_until = datetime.strptime(result["monitors"][-1]["until"],
-                                               "%Y-%m-%d %H:%M:%S")
-                since = max(since, (prev_until + timedelta(seconds=1))
-                            .strftime("%Y-%m-%d %H:%M:%S"))
-            reached_all = True
-            for state in route + ["up"]:
-                if not drive(grid, tok, mid, name, pid, profile, state, key):
-                    reached_all = False
-                    break
-            log(f"  settling {SETTLE_AFTER_UP}s so the recovery alerts reach every tool")
-            time.sleep(SETTLE_AFTER_UP)
-            until = now_local()
-            result["monitors"].append({
-                "monitor_id": mid, "key": key,
-                "name": f"{name} [{label}]", "search_name": name,
-                "type": "URL",
-                "route": route, "since": since, "until": until,
-                "complete": reached_all})
-            save()
-            if not reached_all:
-                verdict = "FAIL"
-                # leave the monitor UP before trying the next route
-                drive(grid, tok, mid, name, pid, profile, "up", key)
-        result["cycle_ended_at"] = now_local()
-    except Exception as exc:  # noqa: BLE001
-        verdict = "FAIL"
-        result["error"] = str(exc)
-        step("cycle stopped", False, str(exc))
-    finally:
-        # RESTORE: original profile back on the monitor, test profile at UP.
-        okp = set_monitor_profile(grid, tok, mid, monitor, original_pid)
-        okt, _ = set_thresholds(grid, tok, pid, profile, "up")
-        result["restored"] = bool(okp and okt)
-        step(f"{name}: original threshold profile restored", okp, original_pid)
-        step("test profile left at the UP baseline", okt)
-        s2.api(grid, f"/api/monitor/poll_now/{mid}", tok)
-        up, last, waited = s2.wait_for(grid, tok, mid, 1, STATE_WAIT, poll_every=15)
-        result["restore_verified"] = bool(okp and up)
-        step(f"{name}: UP after restore", up, f"status {last}")
-        if not result["restored"]:
-            verdict = "FAIL_UNSAFE"
-        result["verdict"] = verdict
-        save()
+    result["per_monitor"] = outcome
+    result["restored"] = all(o["restored"] for o in outcome.values()) and len(outcome) == len(plan)
+    result["restore_verified"] = all(o["restore_verified"] for o in outcome.values()) and len(outcome) == len(plan)
+    verdicts = [o["verdict"] for o in outcome.values()]
+    verdict = ("FAIL_UNSAFE" if "FAIL_UNSAFE" in verdicts or len(outcome) != len(plan)
+               else "FAIL" if "FAIL" in verdicts else "PASS")
+    if result.get("errors"):
+        result["error"] = "; ".join(result["errors"])
+    result["verdict"] = verdict
+    result["monitors"].sort(key=lambda m: m["key"].split("route")[-1])
+    save()
     log(f"\n  CYCLE VERDICT: {verdict}")
     return 0 if verdict == "PASS" else 1
 

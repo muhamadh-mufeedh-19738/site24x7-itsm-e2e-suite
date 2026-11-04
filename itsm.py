@@ -735,7 +735,16 @@ def main():
     if args.full:
         ev_file = os.path.join(d, "events.json")
         ev = read_json_file(ev_file)
-        if not ev or not ev.get("monitor_id") or not ev.get("profile_id"):
+        # events.json: {"monitors": [{monitor_id, profile_id, route}, ...]}
+        # (one route per monitor, run in parallel); the older single-monitor
+        # form {monitor_id, profile_id} still works (routes one after another).
+        if ev and not ev.get("monitors") and ev.get("monitor_id"):
+            ev["monitors"] = [{"monitor_id": ev["monitor_id"], "profile_id": ev.get("profile_id"),
+                               "monitor_name": ev.get("monitor_name"), "route": None}]
+        if ev and any(not m.get("monitor_id") or not m.get("profile_id")
+                      for m in ev.get("monitors") or []):
+            ev = None
+        if not ev or not ev.get("monitors"):
             log(f"\n  [WARN] {ev_file} missing or incomplete — the event-based "
                 f"cycle is SKIPPED and the summary will say so.")
             ev = None
@@ -744,12 +753,19 @@ def main():
             ev_log = os.path.join(d, "reports", "events_cycle_"
                                   + time.strftime("%Y%m%d_%H%M%S") + ".log")
             section(f"EVENT-BASED CYCLE STARTED IN PARALLEL — {name}")
-            log(f"  monitor {ev.get('monitor_name') or ev['monitor_id']} · "
-                f"log: {ev_log}")
+            mons = ev["monitors"]
+            for m in mons:
+                log(f"  monitor {m.get('monitor_name') or m['monitor_id']} · "
+                    f"route {m.get('route') or 'critical,trouble then trouble,critical'}")
+            log(f"  log: {ev_log}")
+            if all(m.get("route") for m in mons):
+                cyc = [a for m in mons for a in
+                       ("--pair", f"{m['monitor_id']}:{m['profile_id']}:{m['route']}")]
+            else:
+                cyc = ["--monitor-id", str(mons[0]["monitor_id"]),
+                       "--profile-id", str(mons[0]["profile_id"])]
             ev_proc = subprocess.Popen(
-                [sys.executable, os.path.join(HERE, "stage2c_events.py"),
-                 "--monitor-id", str(ev["monitor_id"]),
-                 "--profile-id", str(ev["profile_id"])],
+                [sys.executable, os.path.join(HERE, "stage2c_events.py")] + cyc,
                 env=env, cwd=d, stdout=open(ev_log, "w"),
                 stderr=subprocess.STDOUT)
 
@@ -770,8 +786,8 @@ def main():
             section(f"VERIFYING THE EVENT-BASED CYCLE — {name}")
             rc2 = run([sys.executable, os.path.join(HERE, "run_all.py")]
                       + [a for a in passthrough if a != "--skip-trigger-test"]
-                      + ["--events-monitor", str(ev["monitor_id"]),
-                         "--events-profile", str(ev["profile_id"]),
+                      + ["--events-monitor", str(ev["monitors"][0]["monitor_id"]),
+                         "--events-profile", str(ev["monitors"][0]["profile_id"]),
                          "--skip-cycle", "--skip-trigger-test"],
                       env, d, "run_all.py --events")
             rc = max(rc, rc2, 1 if ev_rc else 0)

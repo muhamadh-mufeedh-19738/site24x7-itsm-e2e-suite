@@ -258,6 +258,17 @@ def build_label():
     return ""
 
 
+def norm_key(key):
+    """Event results are compared BY ROUTE, not by monitor: the two routes may
+    move between monitors (one shared monitor -> one monitor per route, 4 Nov)
+    and that must not read as a new/removed result."""
+    if key.startswith("Event-based · ") and "[" in key and "]" in key:
+        route = key[key.index("[") + 1:key.index("]")]
+        integ = key[key.index("]") + 1:].lstrip(" ·")
+        return f"Event-based · [{route}] · {integ}"
+    return key
+
+
 def snapshot(reps, account, grid_name, started, finished, total):
     res = {}
     for kind, r in reps:
@@ -265,7 +276,7 @@ def snapshot(reps, account, grid_name, started, finished, total):
             if f.get("integration") in ("(all integrations)", "(server coverage)"):
                 continue
             mode = "Event-based" if kind == "events" else "Consolidated"
-            key = f"{mode} · {f.get('monitor')} · {f.get('integration')}"
+            key = norm_key(f"{mode} · {f.get('monitor')} · {f.get('integration')}")
             res[key] = {"mode": mode, "scenario": f.get("monitor"),
                         "integration": f.get("integration"), "bucket": f["bucket"],
                         "states": {st["state"]: bool(st.get("ok")) for st in steps_of(f)},
@@ -288,6 +299,7 @@ def previous_runs(hdir, account, grid_name):
     for p in glob.glob(os.path.join(hdir, f"{account}__{grid_name}__*.json")):
         snap = load(p)
         if snap and snap.get("results"):
+            snap["results"] = {norm_key(k): v for k, v in snap["results"].items()}
             runs.append(snap)
     return sorted(runs, key=lambda x: x.get("started") or "")
 

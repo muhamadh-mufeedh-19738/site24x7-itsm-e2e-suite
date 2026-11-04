@@ -1,7 +1,19 @@
 {
-  "_comment": "Event-based test (itsm.py --full). Created by the suite owner's request on 3 Nov 2026: a dedicated monitor whose notification profile 'E2E Events - Every Event' is 'Notify for every event occurrence'; profile_id is the test threshold profile, used only during the run.",
-  "monitor_id": "47777000052000360",
-  "monitor_name": "E2E Events Monitor",
-  "profile_id": "47777000052000355",
-  "profile_name": "E2E Events - Response Time"
+  "_comment": "Event-based test (itsm.py --full). Each monitor runs ONE route, all monitors in parallel. Each monitor's notification profile is 'Notify for every event occurrence'; profile_id is that monitor's OWN test threshold profile (never shared, never the monitor's normal profile), used only during the run and restored after.",
+  "monitors": [
+    {
+      "monitor_id": "47777000052000360",
+      "monitor_name": "E2E Events Monitor",
+      "profile_id": "47777000052000355",
+      "profile_name": "E2E Events - Response Time",
+      "route": "critical,trouble"
+    },
+    {
+      "monitor_id": "47777000052037420",
+      "monitor_name": "E2E Events Monitor 2",
+      "profile_id": "47777000052037418",
+      "profile_name": "E2E Events - Response Time 2",
+      "route": "trouble,critical"
+    }
+  ]
 }
