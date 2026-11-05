@@ -425,6 +425,46 @@ def run(argv, env, cwd, label):
         raise
 
 
+def custom_plan():
+    """CUSTOM TEST settings (the Jenkins job S247-Integrations-Custom-Test
+    sets them; they can also be set by hand before a local run). None set =
+    the normal full sanity run, exactly as before.
+
+      S247_TEST_INTEGRATIONS     "Slack Sanity,ServiceNow*"  (empty = all)
+      S247_TEST_ALERTS           both | consolidated | events
+      S247_TEST_CONS_ROUTES      "trouble,down;down,trouble"  one per monitor
+                                 (states: down, trouble)
+      S247_TEST_EVENT_ROUTES     "down,trouble,critical;down,critical,trouble"
+                                 one per event monitor (down, trouble, critical)
+      S247_TEST_ADD_INTEGRATIONS yes | no
+      S247_TEST_NOTES            free text shown at the top of the report
+    """
+    g = lambda k: os.environ.get(k, "").strip()
+    p = {"integrations": [n.strip() for n in g("S247_TEST_INTEGRATIONS").split(",") if n.strip()],
+         "alerts": (g("S247_TEST_ALERTS") or "both").lower(),
+         "cons_routes": g("S247_TEST_CONS_ROUTES").lower().replace(" ", ""),
+         "event_routes": g("S247_TEST_EVENT_ROUTES").lower().replace(" ", ""),
+         "add": (g("S247_TEST_ADD_INTEGRATIONS") or "yes").lower() not in ("no", "false", "0"),
+         "notes": g("S247_TEST_NOTES")}
+    p["custom"] = bool(p["integrations"] or p["alerts"] != "both" or p["cons_routes"]
+                       or p["event_routes"] or not p["add"] or p["notes"])
+    if p["alerts"] not in ("both", "consolidated", "events"):
+        die(f"ALERTS must be both, consolidated or events (got {p['alerts']!r})")
+    label = {"cons_routes": "CONSOLIDATED_ROUTE", "event_routes": "EVENT_ROUTES"}
+    for key, allowed in (("cons_routes", {"down", "trouble"}),
+                         ("event_routes", {"down", "trouble", "critical"})):
+        for route in filter(None, p[key].split(";")):
+            states = route.split(",")
+            bad = [s for s in states if s not in allowed]
+            if bad or not states:
+                die(f"{label[key]}: {route!r} — allowed states are "
+                    f"{', '.join(sorted(allowed))} (UP is added at the end "
+                    f"automatically)")
+            if any(a == b for a, b in zip(states, states[1:])):
+                die(f"{label[key]}: {route!r} repeats a state back to back")
+    return p
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Run the ITSM suite against a chosen account",
@@ -493,6 +533,12 @@ def main():
             a in passthrough for a in ("--events-monitor", "--report-only",
                                        "--dry-run")):
         args.full = True
+    plan = custom_plan()
+    if plan["custom"]:
+        if plan["cons_routes"] and "--routes" not in passthrough:
+            passthrough += ["--routes", plan["cons_routes"]]
+        if not plan["add"]:
+            args.add_integrations_off = True
 
     if args.local_setup:
         grids = load_grids()
@@ -708,6 +754,23 @@ def main():
     add_res = os.path.join(d, "add_integrations.json")
     if os.path.isfile(add_res):
         os.remove(add_res)          # never show an older run's result
+    plan_file = os.path.join(d, "test_plan.json")
+    if os.path.isfile(plan_file):
+        os.remove(plan_file)
+    if plan["custom"]:
+        rec = {k: v for k, v in plan.items() if k != "custom"}
+        rec["job"] = os.environ.get("JOB_NAME") or "local run"
+        rec["build"] = os.environ.get("BUILD_NUMBER") or ""
+        with open(plan_file, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=2)
+        section(f"CUSTOM TEST — {name}")
+        log(f"  integrations : {', '.join(plan['integrations']) or 'all covered'}")
+        log(f"  alerts       : {plan['alerts']}")
+        log(f"  consolidated : {plan['cons_routes'] or 'default routes'}")
+        log(f"  event-based  : {plan['event_routes'] or 'default routes'}")
+        log(f"  add first    : {'yes' if plan['add'] else 'no'}")
+        if plan["notes"]:
+            log(f"  notes        : {plan['notes']}")
     if args.full and not args.add_integrations_off:
         setup = os.path.join(HERE, "integration_setup.py")
         if os.path.isfile(os.path.join(d, "integration_templates.json")):
@@ -769,7 +832,16 @@ def main():
         if ev and any(not m.get("monitor_id") or not m.get("profile_id")
                       for m in ev.get("monitors") or []):
             ev = None
-        if not ev or not ev.get("monitors"):
+        if ev and plan["alerts"] == "consolidated":
+            log("\n  [CUSTOM] consolidated alerts only — event-based cycle not run.")
+            ev = None
+        elif ev and plan["event_routes"]:
+            routes = [r for r in plan["event_routes"].split(";") if r]
+            if len(routes) > len(ev["monitors"]):
+                die(f"{len(routes)} event route(s) given but this account has only "
+                    f"{len(ev['monitors'])} event monitor(s)")
+            ev["monitors"] = [dict(m, route=r) for m, r in zip(ev["monitors"], routes)]
+        elif not ev or not ev.get("monitors"):
             log(f"\n  [WARN] {ev_file} missing or incomplete — the event-based "
                 f"cycle is SKIPPED and the summary will say so.")
             ev = None
@@ -794,10 +866,15 @@ def main():
                 env=env, cwd=d, stdout=open(ev_log, "w"),
                 stderr=subprocess.STDOUT)
 
-    section(f"RUNNING THE SUITE — {name}")
-    rc = run([sys.executable, os.path.join(HERE, "run_all.py")] + passthrough,
-             env, d, "run_all.py")
-    cons_json = newest(os.path.join(d, "reports"), "report_2", ".json")
+    events_only = args.full and plan["alerts"] == "events"
+    if events_only:
+        log("\n  [CUSTOM] event-based alerts only — consolidated cycle not run.")
+        rc, cons_json = 0, None
+    else:
+        section(f"RUNNING THE SUITE — {name}")
+        rc = run([sys.executable, os.path.join(HERE, "run_all.py")] + passthrough,
+                 env, d, "run_all.py")
+        cons_json = newest(os.path.join(d, "reports"), "report_2", ".json")
 
     if args.full:
         evts_json = None
@@ -813,7 +890,8 @@ def main():
                       + [a for a in passthrough if a != "--skip-trigger-test"]
                       + ["--events-monitor", str(ev["monitors"][0]["monitor_id"]),
                          "--events-profile", str(ev["monitors"][0]["profile_id"]),
-                         "--skip-cycle", "--skip-trigger-test"],
+                         "--skip-cycle"]
+                      + ([] if events_only else ["--skip-trigger-test"]),
                       env, d, "run_all.py --events")
             rc = max(rc, rc2, 1 if ev_rc else 0)
             evts_json = newest(os.path.join(d, "reports"), "events_report_2", ".json")

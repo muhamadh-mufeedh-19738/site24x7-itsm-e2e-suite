@@ -622,6 +622,38 @@ summary{cursor:pointer;padding:10px 14px}details[open] summary{border-bottom:1px
 """
 
 
+def test_plan(account):
+    """The custom-test settings of this run (itsm.py writes test_plan.json
+    only for a custom run), or None for the normal sanity run."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts",
+                     account or "", "test_plan.json")
+    return load(p) if os.path.isfile(p) else None
+
+
+def plan_block(plan):
+    if not plan:
+        return ""
+    alerts = {"both": "consolidated + event-based", "consolidated": "consolidated only",
+              "events": "event-based only"}.get(plan.get("alerts"), plan.get("alerts"))
+
+    def routes(spec):
+        return " ; ".join(" → ".join(x.upper() for x in r.split(",")) + " → UP"
+                          for r in spec.split(";") if r) if spec else "default routes"
+    rows = [("Integrations", ", ".join(plan.get("integrations") or []) or "all covered"),
+            ("Alerts", alerts),
+            ("Consolidated route(s)", routes(plan.get("cons_routes"))),
+            ("Event-based route(s)", routes(plan.get("event_routes"))),
+            ("Add integrations first", "yes" if plan.get("add", True) else "no"),
+            ("Started by", f'{plan.get("job")}' + (f' #{plan["build"]}' if plan.get("build") else ""))]
+    body = "".join(f'<div><span>{esc(k)}</span>{esc(v)}</div>' for k, v in rows)
+    notes = (f'<p class="small"><b>Why this run:</b> {esc(plan["notes"])}</p>'
+             if plan.get("notes") else "")
+    return (f'<h2 id="custom">Custom test — not a full sanity run</h2>'
+            f'<div class="card">{notes}<div class="meta">{body}</div>'
+            f'<p class="small muted">Only what is listed here was tested. '
+            f'Use the sanity job for the full validation.</p></div>')
+
+
 def add_integrations(account):
     """This run's 'add integration' results (integration_setup.py), or None
     when the account does not re-add integrations (or it did not run)."""
@@ -698,6 +730,13 @@ def build(cons, evts, account, out_path):
     hdir = history_dir(os.path.dirname(out_path) or ".")
     runs = [r for r in previous_runs(hdir, account, grid_name)
             if (r.get("started") or "") < started]
+    custom = test_plan(account)
+    if custom:
+        # A custom run tests a PART: compare only those results with the last
+        # sanity runs (so untested ones are not "not in this run"), and never
+        # save it to the history the sanity job compares against.
+        for r in runs:
+            r["results"] = {k: v for k, v in r["results"].items() if k in cur["results"]}
     diff_block, diff_line = diff_html(cur, runs)
     build_txt = cur["build"] or "not recorded (local run)"
 
@@ -761,7 +800,7 @@ def build(cons, evts, account, out_path):
                   f'<div class="tile zero">{inner}</div>')
     doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Integrations — {esc(account)} — {esc(started)}</title><style>{CSS}</style></head>
+<title>{"Custom test" if test_plan(account) else "Integrations"} — {esc(account)} — {esc(started)}</title><style>{CSS}</style></head>
 <body><div class="wrap">
 <h1>Third-Party Integrations — {esc(account)}</h1>
 <div class="meta">
@@ -778,6 +817,7 @@ def build(cons, evts, account, out_path):
 <div class="banner b-{health}">{ICON[health]} {WORD[health].upper()} — {esc(msg)}
 <small>Consolidated alerts (monitor level) and event-based alerts (every event), each checked state by state.</small></div>
 <div class="tiles">{tiles}</div>
+{plan_block(test_plan(account))}
 
 <h2 id="changes">What changed since the last run</h2><div class="card">{diff_block}</div>
 
@@ -803,9 +843,10 @@ Ticket ids are the ids inside the tool. No passwords or tokens are in this repor
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(doc)
     stamp = (started or "").replace("-", "").replace(":", "").replace(" ", "_")
-    with open(os.path.join(hdir, f"{account}__{grid_name}__{stamp}.json"), "w",
-              encoding="utf-8") as fh:
-        json.dump(cur, fh, indent=1)
+    if not custom:
+        with open(os.path.join(hdir, f"{account}__{grid_name}__{stamp}.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(cur, fh, indent=1)
     with open(os.path.join(os.path.dirname(out_path) or ".", "diff_line.txt"), "w",
               encoding="utf-8") as fh:
         fh.write(diff_line + "\n")

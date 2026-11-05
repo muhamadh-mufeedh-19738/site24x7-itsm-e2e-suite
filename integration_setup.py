@@ -43,6 +43,7 @@ SAFETY
 """
 
 import argparse
+import fnmatch
 import getpass
 import glob
 import json
@@ -355,6 +356,11 @@ def do_recreate(api, d, templates, check_only, only):
     for t in templates:
         name, tid = t["name"], t["type_id"]
         if only and name not in only:
+            continue
+        # A custom test run covers only the integrations it names.
+        pats = [x.strip().lower() for x in
+                os.environ.get("S247_TEST_INTEGRATIONS", "").split(",") if x.strip()]
+        if pats and not any(fnmatch.fnmatch(name.lower(), x) for x in pats):
             continue
         r = {"name": name, "app": t["app"], "type_id": tid, "status": "FAIL",
              "steps": [], "mismatches": [], "old_service_id": None,

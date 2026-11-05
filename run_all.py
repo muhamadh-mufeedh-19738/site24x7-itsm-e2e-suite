@@ -652,6 +652,13 @@ def load_scope():
     unless it is listed here, because it is not part of what this script is
     responsible for.
     """
+    # CUSTOM TEST (Jenkins job S247-Integrations-Custom-Test, or set by
+    # hand): S247_TEST_INTEGRATIONS="Slack Sanity,Snow*" narrows THIS run to
+    # those integrations. Not set (the sanity job) = unchanged behaviour.
+    custom = [n.strip().lower() for n in
+              os.environ.get("S247_TEST_INTEGRATIONS", "").split(",") if n.strip()]
+    if custom:
+        return {"names": set(custom), "service_ids": set()}
     data = load_json(SCOPE_FILE)
     if not isinstance(data, dict):
         return None
