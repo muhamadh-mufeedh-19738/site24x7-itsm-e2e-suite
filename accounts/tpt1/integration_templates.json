@@ -1,6 +1,6 @@
 {
   "_comment": "Settings the suite ADDS these integrations with on every run (integration_setup.py). No secrets here: hook URLs / keys live in .itsm.env (INTEG_SECRET_*).",
-  "captured_at": "2026-11-04T16:10:13+0530",
+  "captured_at": "2026-11-06T17:06:02+0530",
   "integrations": [
     {
       "name": "ServiceDesk Plus Cloud",
@@ -48,7 +48,6 @@
         "title": "$MONITORNAME is $STATUS",
         "alert_tags_id": [],
         "action_on_deletion": 2,
-        "cmdb_service_id": "47777000051445003",
         "cmdb_selection_type": 0,
         "sendClearAlerts": 0,
         "down_alert": true,
@@ -107,6 +106,7 @@
       "type_id": 1,
       "app": "PagerDuty",
       "secret_field": "service_key",
+      "secret_auto": false,
       "template": {
         "sendClearAlerts": 0,
         "down_alert": true,
@@ -118,6 +118,30 @@
         "critical_alert": true,
         "send_incident_parameters": true,
         "name": "Pager Duty Sanity"
+      }
+    },
+    {
+      "name": "Zoho Desk Sanity",
+      "type_id": 20,
+      "app": "Zoho Desk",
+      "secret_field": null,
+      "secret_auto": false,
+      "template": {
+        "sendClearAlerts": 0,
+        "down_alert": true,
+        "department_id": "213004000000006907",
+        "oauth2_provider_id": "47777000028874080",
+        "subject": "$MONITORNAME is $STATUS",
+        "department_name": "PandyaPallaku",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 20,
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "organization_id": 84903591,
+        "name": "Zoho Desk Sanity",
+        "to_email_id": "support@pandyapallaku.localzohodesk.com"
       }
     }
   ]
