@@ -101,6 +101,24 @@
         "send_incident_parameters": true,
         "name": "Discord Sanity"
       }
+    },
+    {
+      "name": "Pager Duty Sanity",
+      "type_id": 1,
+      "app": "PagerDuty",
+      "secret_field": "service_key",
+      "template": {
+        "sendClearAlerts": 0,
+        "down_alert": true,
+        "sender_name": "Site24x7",
+        "type": 1,
+        "title": "$MONITORNAME is $STATUS",
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "send_incident_parameters": true,
+        "name": "Pager Duty Sanity"
+      }
     }
   ]
 }
