@@ -245,9 +245,21 @@ function die(msg, extra) {
     }
 
     const deadline = Date.now() + 120000;
+    let lastOpen = 0;
     while (Date.now() < deadline) {
       const r = await sessionWorks();
       if (r.ok) return { ok: true, why: r.why };
+      // FIX (6 Nov): after a FRESH sign-in the new UI lands on Home, and the
+      // Alert Logs API answers 400 until the Alert Logs page itself has been
+      // opened once in that session (the page's own call then succeeds and
+      // so does ours). Open it, like a person would, every 30s while waiting.
+      if (Date.now() - lastOpen > 30000) {
+        lastOpen = Date.now();
+        await page.goto(grid + '/app/client#/home/operations/alert-logs',
+                        { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.waitForTimeout(8000);
+        continue;
+      }
       if (await skipInterstitials()) {
         // the app may land on a different page after skipping -- reopen the grid
         await page.goto(grid + '/app/client#/home/operations/alert-logs',
