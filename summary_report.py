@@ -876,7 +876,9 @@ def main():
         dst.write(src.read())
     print(f"  [OK] summary report: {os.path.abspath(out)}  (health {health})")
     print(f"  [OK] latest link   : file://{os.path.abspath(latest_copy)}")
-    return 0
+    # The exit code follows the report's verdict, so Jenkins is never
+    # greener than the report (custom #4: report BLOCKED, build SUCCESS).
+    return 0 if health == PASS else 1
 
 
 if __name__ == "__main__":

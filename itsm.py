@@ -907,7 +907,10 @@ def main():
             argv += ["--consolidated", cons_json]
         if evts_json:
             argv += ["--events", evts_json]
-        run(argv, env, d, "summary_report.py")
+        rc_sum = run(argv, env, d, "summary_report.py")
+        # report not PASS (DEFECT or BLOCKED) -> at least 1 (Jenkins UNSTABLE)
+        if rc_sum == 1:
+            rc = max(rc, 1)
 
     section(f"DONE — {name}")
     rep = os.path.join(d, "reports")
