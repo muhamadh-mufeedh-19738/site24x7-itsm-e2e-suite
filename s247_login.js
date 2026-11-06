@@ -244,8 +244,25 @@ function die(msg, extra) {
       return clicked;
     }
 
+    // FIX (6 Nov, tpt1 on Jenkins): do NOT open another page until Zoho has
+    // finished the sign-in and left the sign-in page. On a slow machine the
+    // first Alert Logs jump below fired at once, cut the sign-in off half way
+    // and landed back on an empty sign-in page.
+    const onSignin = () => /\/signin|\/accounts\/|login/i.test(page.url());
+    const leaveBy = Date.now() + 45000;
+    while (onSignin() && Date.now() < leaveBy) {
+      if (await skipInterstitials()) continue;
+      await page.waitForTimeout(1500);
+    }
+    if (onSignin()) {
+      const txt = (await page.locator('body').innerText().catch(() => ''))
+        .replace(/\s+/g, ' ').trim().slice(0, 200);
+      console.log('  still on the sign-in page after 45s: ' + txt);
+      await page.screenshot({ path: SHOT, fullPage: true }).catch(() => {});
+    }
+
     const deadline = Date.now() + 120000;
-    let lastOpen = 0;
+    let lastOpen = Date.now();
     while (Date.now() < deadline) {
       const r = await sessionWorks();
       if (r.ok) return { ok: true, why: r.why };
@@ -276,7 +293,8 @@ function die(msg, extra) {
       process.stdout.write('.');
     }
     console.log('');
-    return { ok: false, why: 'signed in but no usable session after 120s' };
+    return { ok: false, why: 'signed in but no usable session after 120s'
+                             + ' (last page: ' + page.url().split('?')[0] + ')' };
   }
 
   try {
