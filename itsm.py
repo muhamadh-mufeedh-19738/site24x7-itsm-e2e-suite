@@ -832,15 +832,20 @@ def main():
         if ev and any(not m.get("monitor_id") or not m.get("profile_id")
                       for m in ev.get("monitors") or []):
             ev = None
+        # Custom test: overrides first, then the normal start below.
+        # (FIX 6 Nov: these were in the same if/elif chain as the start, so
+        # giving EVENT_ROUTES skipped starting the event cycle entirely.)
         if ev and plan["alerts"] == "consolidated":
             log("\n  [CUSTOM] consolidated alerts only — event-based cycle not run.")
             ev = None
-        elif ev and plan["event_routes"]:
+        if ev and ev.get("monitors") and plan["event_routes"]:
             routes = [r for r in plan["event_routes"].split(";") if r]
             if len(routes) > len(ev["monitors"]):
                 die(f"{len(routes)} event route(s) given but this account has only "
                     f"{len(ev['monitors'])} event monitor(s)")
             ev["monitors"] = [dict(m, route=r) for m, r in zip(ev["monitors"], routes)]
+        if plan["alerts"] == "consolidated":
+            pass                    # already said so above
         elif not ev or not ev.get("monitors"):
             log(f"\n  [WARN] {ev_file} missing or incomplete — the event-based "
                 f"cycle is SKIPPED and the summary will say so.")
