@@ -654,6 +654,16 @@ def plan_block(plan):
             f'Use the sanity job for the full validation.</p></div>')
 
 
+def health_checks(account):
+    """Start-of-run checks (health_checks.py): monitor edits saved? ServiceNow
+    awake? Only the failed ones are returned."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts",
+                     account or "", "health_checks.json")
+    data = load(p) if os.path.isfile(p) else None
+    return [r for r in (data or {}).get("results") or []
+            if r.get("status") in ("DEFECT", "BLOCKED")]
+
+
 def add_integrations(account):
     """This run's 'add integration' results (integration_setup.py), or None
     when the account does not re-add integrations (or it did not run)."""
@@ -697,12 +707,18 @@ def build(cons, evts, account, out_path):
     adds = add_integrations(account)
     add_fail = [r for r in adds or [] if r["status"] not in ("PASS", "BLOCKED")]
     add_blk = [r for r in adds or [] if r["status"] == "BLOCKED"]
-    health = (DEFECT if counts[DEFECT] or add_fail
-              else BLOCKED if counts[BLOCKED] or counts[INCONC] or add_blk
+    hc = health_checks(account)
+    hc_def = [r for r in hc if r["status"] == "DEFECT"]
+    hc_blk = [r for r in hc if r["status"] == "BLOCKED"]
+    health = (DEFECT if counts[DEFECT] or add_fail or hc_def
+              else BLOCKED if counts[BLOCKED] or counts[INCONC] or add_blk or hc_blk
               else PASS)
-    msg = {DEFECT: f"{counts[DEFECT] + len(add_fail)} problem(s) need a developer",
+    msg = {DEFECT: f"{counts[DEFECT] + len(add_fail) + len(hc_def)} problem(s) need a developer",
            BLOCKED: "Some checks could not run — not a product verdict",
            PASS: "Every integration worked for every state"}[health]
+    if any(r["check"] == "monitor_edit" for r in hc_def):
+        msg = ("This build does not save monitor changes — no alert could be driven, "
+               "so the integrations could not be tested (see Needs attention)")
     grid = next(((r or {}).get("env") or {}).get("grid") for _, r in reps if r) or ""
     # Wall-clock: first start to last finish (the event cycle may run in
     # parallel with the consolidated run, so the parts must not be added).
@@ -741,6 +757,12 @@ def build(cons, evts, account, out_path):
     build_txt = cur["build"] or "not recorded (local run)"
 
     attn = ""
+    for r in hc:
+        b = DEFECT if r["status"] == "DEFECT" else BLOCKED
+        what = {"monitor_edit": "Monitor changes not saved (start-of-run check)",
+                "servicenow": "ServiceNow instance (start-of-run check)"}.get(r["check"], r["check"])
+        attn += (f'<li><span class="v v-{b}">{ICON[b]} {WORD[b]}</span> '
+                 f'<span class="what">{esc(what)}</span><br><span>{esc(r["detail"])}</span></li>')
     for r in add_fail + add_blk:
         b = BLOCKED if r in add_blk else DEFECT
         why = "; ".join(r.get("mismatches") or [s for s in r.get("steps") or []

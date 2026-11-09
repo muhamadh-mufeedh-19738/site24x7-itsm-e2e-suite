@@ -751,6 +751,18 @@ def main():
     # runs on these freshly added integrations. Result: add_integrations.json
     # (shown in the report). A failed add never stops the run; it is
     # reported. Accounts without integration_templates.json are skipped.
+    # ---- HEALTH CHECKS (every full run, ~10 s, never stops the run) -----
+    # Can monitor edits be saved on this build? Is ServiceNow awake? Shown at
+    # the top of the report (9 Nov: a build that silently dropped monitor
+    # edits was reported as "usually login, cookie or credentials").
+    hc_file = os.path.join(d, "health_checks.json")
+    if os.path.isfile(hc_file):
+        os.remove(hc_file)
+    if args.full:
+        section(f"HEALTH CHECKS — {name}")
+        run([sys.executable, os.path.join(HERE, "health_checks.py")], env, d,
+            "health_checks.py")
+
     add_res = os.path.join(d, "add_integrations.json")
     if os.path.isfile(add_res):
         os.remove(add_res)          # never show an older run's result
@@ -908,9 +920,13 @@ def main():
         if evts_json:
             argv += ["--events", evts_json]
         rc_sum = run(argv, env, d, "summary_report.py")
-        # report not PASS (DEFECT or BLOCKED) -> at least 1 (Jenkins UNSTABLE)
+        # A summary report was written: the build result follows IT.
+        #   PASS -> keep rc (0)   not PASS -> 1 (Jenkins UNSTABLE + report)
+        # Exit 2 ("could not test", Jenkins FAILURE "usually login, cookie or
+        # credentials") is kept only for runs that produced no report. 9 Nov:
+        # a build that did not save monitor edits showed that misleading text.
         if rc_sum == 1:
-            rc = max(rc, 1)
+            rc = 1
 
     section(f"DONE — {name}")
     rep = os.path.join(d, "reports")
