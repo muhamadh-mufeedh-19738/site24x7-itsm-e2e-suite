@@ -112,6 +112,30 @@
         "send_incident_parameters": true,
         "name": "Pager Duty Sanity"
       }
+    },
+    {
+      "name": "Zoho Desk Sanity",
+      "type_id": 20,
+      "app": "Zoho Desk",
+      "secret_field": null,
+      "secret_auto": false,
+      "template": {
+        "sendClearAlerts": 0,
+        "down_alert": true,
+        "department_id": "202878000000006907",
+        "oauth2_provider_id": "45233000000019001",
+        "subject": "$MONITORNAME is $STATUS",
+        "department_name": "POGOI",
+        "manual_resolve": false,
+        "problem_alert": false,
+        "type": 20,
+        "selection_type": 0,
+        "trouble_alert": true,
+        "critical_alert": true,
+        "organization_id": 81482724,
+        "name": "Zoho Desk Sanity",
+        "to_email_id": "support@pogoi.localzohodesk.com"
+      }
     }
   ]
 }

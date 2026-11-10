@@ -75,8 +75,8 @@ and the Slack and Discord channels.
 | Account | Integrations the suite adds | Other integrations (tested as they are) | Consolidated monitors (default routes) | Event monitors (default routes) |
 |---|---|---|---|---|
 | automation | ServiceNow Automation, Pager Duty Automation, ServiceDesk Plus Cloud, Sanity (Zoho Desk), Slack Sanity, Discord Sanity | Sanity ITOC, Sanity Mattermost, TOPdesk QA Trial | New Monitor (trouble,down), New Monitor 2 (down,trouble) | Website - RT (down,trouble,critical), E2E Events Monitor 2 (down,critical,trouble) |
-| tpt | Snow, ServiceDesk Plus Cloud, Slack Sanity, Discord Sanity | AAG Sanity, Halo Alternate Notification Check | Check for New Mon Addition (trouble,down), Monitor - 1 (down,trouble) | E2E Events Monitor (down,trouble,critical), E2E Events Monitor 2 (down,critical,trouble) |
-| tpt1 | ServiceDesk Plus Cloud, Snow Sanity, Slack Sanity, Discord Sanity | Final Sanity AAG, HALO CMDB Sync, ilert, SDP MSP, topdesk | Do not Delete (trouble,down), Do not Delete - 2 (down,trouble) | E2E Events Monitor (down,trouble,critical), E2E Events Monitor 2 (down,critical,trouble) |
+| tpt | Snow, ServiceDesk Plus Cloud, Slack Sanity, Discord Sanity, Pager Duty Sanity, Zoho Desk Sanity | AAG Sanity, Halo Alternate Notification Check | Check for New Mon Addition (trouble,down), Monitor - 1 (down,trouble) | E2E Events Monitor (down,trouble,critical), E2E Events Monitor 2 (down,critical,trouble) |
+| tpt1 | ServiceDesk Plus Cloud, Snow Sanity, Slack Sanity, Discord Sanity, Pager Duty Sanity, Zoho Desk Sanity | Final Sanity AAG, HALO CMDB Sync, ilert, SDP MSP, topdesk | Do not Delete (trouble,down), Do not Delete - 2 (down,trouble) | E2E Events Monitor (down,trouble,critical), E2E Events Monitor 2 (down,critical,trouble) |
 
 Integration names change only if someone renames them in Site24x7; the
 helper refuses a name that does not exist and lists the real ones.
