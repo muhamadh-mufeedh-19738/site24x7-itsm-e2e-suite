@@ -413,6 +413,16 @@ def diff_html(cur, runs):
     if not prev:
         return ("<p class=\"muted\">No previous run of this account on this grid "
                 "to compare with. The next run will show what changed.</p>", "first run - nothing to compare")
+    if not cur["results"]:
+        # 11 Nov (#93): nothing could be tested, yet the box said "= Same as
+        # the last run — no new problems" with Pass 29 → 0. A run that
+        # tested nothing cannot be compared, and is not saved to history.
+        return ('<div class="dverdict worse"><b>Not comparable — nothing could be '
+                'tested in this run</b> — see Needs attention for why. The last run '
+                f'that tested something was <b>{esc(prev.get("started"))}</b> on build '
+                f'<b>{esc(prev.get("build") or "—")}</b> ({bucket_counts(prev)[PASS]} pass, '
+                f'{bucket_counts(prev)[DEFECT]} defect).</div>',
+                "nothing tested - not compared")
     d = compare(cur, prev)
     hist = runs + [cur]
     same_build = cur["build"] and cur["build"] == prev.get("build")
@@ -513,9 +523,9 @@ def diff_html(cur, runs):
         if len(keys) == 1:
             rest.append((keys[0], c, None))
             continue
-        word = "removed" if c == "not in this run" else "added"
+        word = "not tested in this run" if c == "not in this run" else "added"
         extra.append(f'<b>Event-based route {esc(route)}</b>: {word} — {len(keys)} '
-                     f'integration results ({"the route changed; compared again from the next run" if word == "added" else "no longer run"})')
+                     f'integration results ({"the route changed; compared again from the next run" if word == "added" else "see Needs attention / Event-based alerts for why"})')
     extra += [f'{label(k) if k in cur["results"] or k in prev["results"] else esc(k)}: {esc(c)}'
               for k, c, _ in rest]
     body += ('<div class="dgrp"><div class="dt">Other changes</div>'
@@ -814,11 +824,16 @@ def build(cons, evts, account, out_path):
     target = {PASS: "consolidated", DEFECT: "attention", BLOCKED: "attention",
               KNOWN: "details"}
     tiles = ""
+    # 11 Nov (#93): banner said DEFECT while the Defect tile said 0. The
+    # tiles count the start-of-run checks and add-integration results too.
+    tcount = dict(counts)
+    tcount[DEFECT] += len(hc_def) + len(add_fail)
+    tcount[BLOCKED] += len(hc_blk) + len(add_blk)
     for b, c in ((PASS, "pass"), (DEFECT, "def"), (BLOCKED, "blk"), (KNOWN, "kn")):
-        inner = (f'<div class="n" style="color:var(--{c})">{counts[b]}</div>'
+        inner = (f'<div class="n" style="color:var(--{c})">{tcount[b]}</div>'
                  f'<div class="l">{WORD[b]}</div>')
         tiles += (f'<a class="tile" href="#{target[b]}">{inner}'
-                  f'<div class="go">view &darr;</div></a>' if counts[b] else
+                  f'<div class="go">view &darr;</div></a>' if tcount[b] else
                   f'<div class="tile zero">{inner}</div>')
     doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -865,7 +880,7 @@ Ticket ids are the ids inside the tool. No passwords or tokens are in this repor
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(doc)
     stamp = (started or "").replace("-", "").replace(":", "").replace(" ", "_")
-    if not custom:
+    if not custom and cur["results"]:
         with open(os.path.join(hdir, f"{account}__{grid_name}__{stamp}.json"), "w",
                   encoding="utf-8") as fh:
             json.dump(cur, fh, indent=1)

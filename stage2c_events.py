@@ -238,6 +238,23 @@ def worker(grid, tok, w, routes, outcome):
         verdict = "FAIL"
         with LOCK:
             result.setdefault("errors", []).append(f"{name}: {exc}")
+            # 11 Nov (#93): a monitor that stopped BEFORE its route wrote no
+            # entry, so verification dropped it (E2E Events Monitor 2 vanished
+            # from the report) or showed "route unknown". Record every route
+            # that never ran, with the reason, so the report shows it.
+            done = {m["key"] for m in result["monitors"]}
+            for rnum, route in routes:
+                key = f"{mid}:route{rnum}"
+                if key in done:
+                    continue
+                label = " → ".join(x.upper() for x in route + ["up"])
+                result["monitors"].append({
+                    "monitor_id": mid, "key": key, "name": f"{name} [{label}]",
+                    "search_name": name, "type": "URL", "route": route,
+                    "since": now_local(), "until": now_local(), "complete": False,
+                    "not_driven": True,
+                    "reason": f"{name} was never driven into {route[0].upper()}: {exc}"})
+            save()
         step(f"{name}: cycle stopped", False, str(exc))
     finally:
         okp = set_monitor_profile(grid, tok, mid, monitor, w["original_pid"])

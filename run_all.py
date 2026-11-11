@@ -290,10 +290,18 @@ def cycle_not_driven_reason(cycle):
                      f"not answering, which usually means the grid was "
                      f"restarting or unhealthy")
     if cycle.get("error"):
-        parts.append(f"Stage 2b stopped with: {cycle['error']}")
-    parts.append("This is NOT an integration defect and NOT a session-cookie "
-                 "problem. Check the monitors are UP in the Site24x7 UI and "
-                 "the grid is healthy, then re-run")
+        parts.append(f"The alert cycle stopped with: {cycle['error']}")
+    if "threshold profile" in str(cycle.get("error") or ""):
+        parts.append("Site24x7 accepted the monitor change (HTTP 200) but did "
+                     "not save it — see the start-of-run 'Monitor changes not "
+                     "saved' check")
+    if "threshold profile" in str(cycle.get("error") or ""):
+        parts.append("This is a PRODUCT problem on this build (monitor changes "
+                     "are not saved), not an integration, login or cookie problem")
+    else:
+        parts.append("This is NOT an integration defect and NOT a session-cookie "
+                     "problem. Check the monitors are UP in the Site24x7 UI and "
+                     "the grid is healthy, then re-run")
     return ". ".join(p.rstrip(".") for p in parts) + "."
 
 
@@ -2737,7 +2745,11 @@ def main():
     # would take ~15 minutes and then wrongly blame a "dead session cookie".
     # Stop here and report the REAL reason instead.
     cycle_block_reason = None
-    if cycle and not args.report_only and not args.skip_cycle:
+    # Event-based verification always runs with --skip-cycle (itsm.py ran the
+    # cycle minutes earlier in parallel), so it must apply this check too.
+    # 11 Nov (#93): without it a cycle that never started was searched for
+    # 15 min and blamed on "dead session cookie / wrong account".
+    if cycle and not args.report_only and (not args.skip_cycle or events_mode):
         cycle_block_reason = cycle_not_driven_reason(cycle)
         if cycle_block_reason:
             section("ALERT CYCLE NEVER STARTED — NOTHING TO VERIFY")
@@ -2768,7 +2780,9 @@ def main():
                                  "key": m.get("key"),
                                  "search_name": m.get("search_name"),
                                  "since": m.get("since"),
-                                 "until": m.get("until")})
+                                 "until": m.get("until"),
+                                 "not_driven": m.get("not_driven"),
+                                 "reason": m.get("reason")})
         if not monitors:                       # older single-monitor result
             mon = cycle.get("monitor")
             if isinstance(mon, dict):
@@ -3036,13 +3050,23 @@ def main():
         s3_before = os.path.getmtime(STAGE3_RESULT) \
             if os.path.isfile(STAGE3_RESULT) else None
 
+        if mon.get("not_driven") and not cycle_block_reason:
+            # this monitor (route) never ran; the others may have
+            per_monitor.append({"monitor_id": mid, "name": name,
+                                "monitor_type": mon_type,
+                                "blocked": True,
+                                "headline": "Alert cycle never started — "
+                                            "monitor was not driven DOWN, "
+                                            "TROUBLE or CRITICAL",
+                                "reason": mon.get("reason") or "route never ran"})
+            continue
         if cycle_block_reason:
             per_monitor.append({"monitor_id": mid, "name": name,
                                 "monitor_type": mon_type,
                                 "blocked": True,
                                 "headline": "Alert cycle never started — "
-                                            "monitor was not driven DOWN "
-                                            "or TROUBLE",
+                                            "monitor was not driven into "
+                                            "a problem state",
                                 "reason": cycle_block_reason})
             continue
 
@@ -3596,12 +3620,13 @@ def main():
             f"{x['integration']:<26} {x['headline']}")
 
     if counts.get(BLOCKED):
-        section("NOT A PRODUCT BUG — READ THIS")
+        section("NOT TESTED — READ THIS")
         for x in findings:
             if x["bucket"] == BLOCKED:
-                log(f"  {x['integration']}: {x['headline']}")
-        log("\n  These integrations were NOT tested. Do not raise bugs for")
-        log("  them. Fix the access problem and re-run.")
+                log(f"  {x['integration']} · {x.get('monitor')}: {x['headline']}")
+        log("\n  These integrations were NOT tested, so there is no verdict on")
+        log("  them. The reason is above (it can be our setup OR a product")
+        log("  problem that stopped the test, e.g. monitor changes not saved).")
 
     section(f"BUILD HEALTH: {health}")
     log(f"  {reason}")
